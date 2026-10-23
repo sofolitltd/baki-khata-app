@@ -392,16 +392,22 @@ class Store extends ChangeNotifier {
   }
 
   /// সার্ভার থেকে আসা পরিবর্তন মেশানো। লোকালে নতুন কিছু থাকলে সেটাই থাকে।
-  /// ছবি সিঙ্ক হয় না (লোকাল ফাইল), তাই ছবির ঘর ছোঁয়া হয় না।
+  /// সার্ভারের ছবি (data URI) লোকাল ফাইলে সেভ হয়।
   Future<void> applyRemote(List customers, List entries) async {
     if (customers.isEmpty && entries.isEmpty) return;
     final changed = <int>{};
     final removed = <int>{};
+    // ছবি ফাইলে লিখতে হয় বলে ট্রানজ্যাকশনের আগেই করে রাখা।
+    final photos = <Map<String, dynamic>, String>{};
+    for (final m in customers.cast<Map<String, dynamic>>()) {
+      photos[m] = await photoFromData((m['photo'] as String?) ?? '');
+    }
+    final stale = <String>[];
     await _db.transaction((txn) async {
       for (final m in customers.cast<Map<String, dynamic>>()) {
         final local = (await txn.query(
           'customers',
-          columns: ['id', 'updated_at'],
+          columns: ['id', 'updated_at', 'photo'],
           where: 'uid = ?',
           whereArgs: [m['uid']],
         )).firstOrNull;
@@ -416,16 +422,23 @@ class Store extends ChangeNotifier {
           'updated_at': m['updated_at'],
           'deleted': m['deleted'] == true ? 1 : 0,
           'dirty': 0,
+          'photo': photos[m] ?? '',
         };
         int id;
         if (local == null) {
-          id = await txn.insert('customers', {
-            ...values,
-            'uid': m['uid'],
-            'photo': '',
-          });
+          id = await txn.insert('customers', {...values, 'uid': m['uid']});
         } else if ((m['updated_at'] as int) >= (local['updated_at'] as int)) {
           id = local['id'] as int;
+          final old = (local['photo'] as String?) ?? '';
+          if (old.isNotEmpty &&
+              values['photo'] == '' &&
+              m['updated_at'] == local['updated_at']) {
+            // পুরনো অ্যাপ ছবি ছাড়া পাঠিয়েছিল; লোকাল ছবি রেখে আবার আপলোড হবে।
+            values['photo'] = old;
+            values['dirty'] = 1;
+          } else if (old.isNotEmpty && old != values['photo']) {
+            stale.add(old);
+          }
           await txn.update(
             'customers',
             values,
@@ -477,6 +490,10 @@ class Store extends ChangeNotifier {
         changed.add(customer['id'] as int);
       }
     });
+    // নতুন ছবি না আসা (বাতিল রো) ফাইল রাখা হবে; শুধু বদলে যাওয়া পুরনো ফাইল মোছা।
+    for (final f in stale) {
+      await deletePhoto(f);
+    }
     await refresh();
     for (final id in removed) {
       await Notifier.cancel(id);

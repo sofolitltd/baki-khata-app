@@ -11,6 +11,7 @@ import 'auth.dart';
 import 'package:intl/intl.dart';
 
 import 'config.dart';
+import 'photo.dart';
 import 'pin_field.dart';
 import 'store.dart';
 import 'utils.dart';
@@ -33,7 +34,7 @@ class SyncService extends ChangeNotifier {
   static const _kLastAt = 'sync_last_at';
   static const _kLastPushed = 'sync_last_pushed';
   static const _kLastPulled = 'sync_last_pulled';
-  static const _chunk = 1000;
+  static const _chunk = 200;
 
   late SharedPreferences _prefs;
   Timer? _debounce;
@@ -239,7 +240,7 @@ class SyncService extends ChangeNotifier {
     final store = Store.instance;
     try {
       final d = await store.dirtyRows();
-      final cs = d.customers.map(_customerJson).toList();
+      final cs = [for (final r in d.customers) await _customerJson(r)];
       final es = d.entries.map(_entryJson).toList();
       for (var i = 0; i < cs.length; i += _chunk) {
         await _send(
@@ -289,12 +290,15 @@ class SyncService extends ChangeNotifier {
 
   static const _offlineMsg = 'সার্ভারে কানেক্ট করা যায়নি। ইন্টারনেট দেখুন';
 
-  static Map<String, Object?> _customerJson(Map<String, Object?> r) => {
+  static Future<Map<String, Object?>> _customerJson(
+    Map<String, Object?> r,
+  ) async => {
     'uid': r['uid'],
     'ledger': r['ledger'],
     'name': r['name'],
     'phone': r['phone'],
     'address': r['address'],
+    'photo': await photoToData(r['photo'] as String? ?? ''),
     'due_date': r['due_date'],
     'reminder_at': r['reminder_at'],
     'created_at': r['created_at'],
@@ -561,7 +565,11 @@ class SyncButton extends StatelessWidget {
           message: 'অনলাইন সিঙ্ক',
           child: InkWell(
             borderRadius: BorderRadius.circular(13),
-            onTap: () => showSyncSheet(context),
+            onTap: () {
+              // ট্যাপ করলেই সিঙ্ক শুরু; শিটে অবস্থা দেখা যায়।
+              unawaited(s.syncNow());
+              showSyncSheet(context);
+            },
             child: Container(
               width: size,
               height: size,
