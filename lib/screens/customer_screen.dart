@@ -8,6 +8,7 @@ import '../photo.dart';
 import '../store.dart';
 import '../theme.dart';
 import '../utils.dart';
+import '../voice.dart';
 import 'entry_sheet.dart';
 import 'shell.dart';
 
@@ -156,6 +157,11 @@ class _CustomerScreenState extends State<CustomerScreen> {
               ],
             ),
             actions: [
+              IconButton(
+                tooltip: 'শুনুন',
+                icon: const Icon(Icons.volume_up_rounded),
+                onPressed: () => Voice.instance.say(context, customerSpeech(c)),
+              ),
               PopupMenuButton<String>(
                 onSelected: (v) {
                   if (v == 'edit') showCustomerForm(context, customer: c);

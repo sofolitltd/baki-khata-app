@@ -7,6 +7,7 @@ import '../notifications.dart';
 import '../store.dart';
 import '../theme.dart';
 import '../utils.dart';
+import '../voice.dart';
 
 /// বাকি / জমা লেখার শিট।
 /// [customer] না দিলে নতুন (বা আগের) কাস্টমারের নাম লিখে সরাসরি বাকি লেখা যায় —
@@ -252,6 +253,17 @@ class _EntrySheetState extends State<_EntrySheet> {
                   ),
                 ),
                 prefixIconConstraints: const BoxConstraints(),
+                suffixIcon: MicButton(
+                  color: accent,
+                  onText: (t) {
+                    final v = parseSpokenAmount(t);
+                    if (v == null) return;
+                    setState(
+                      () =>
+                          _amount.text = v.toStringAsFixed(v % 1 == 0 ? 0 : 2),
+                    );
+                  },
+                ),
               ),
             ),
 
@@ -278,6 +290,13 @@ class _EntrySheetState extends State<_EntrySheet> {
               decoration: InputDecoration(
                 hintText: _isBaki ? _t.whatHint : 'নোট (ঐচ্ছিক)',
                 prefixIcon: const Icon(Icons.notes_rounded),
+                suffixIcon: MicButton(
+                  onFinal: (t) => setState(() {
+                    final cur = _note.text.trim();
+                    _note.text = cur.isEmpty ? t : '$cur $t';
+                  }),
+                  onText: (_) {},
+                ),
               ),
             ),
 
@@ -391,6 +410,10 @@ class _EntrySheetState extends State<_EntrySheet> {
         decoration: InputDecoration(
           hintText: _isBaki ? _t.partyHint : _t.reduceWho,
           prefixIcon: const Icon(Icons.person_outline_rounded),
+          suffixIcon: MicButton(
+            onFinal: (t) => controller.text = t,
+            onText: (_) {},
+          ),
         ),
       );
     },

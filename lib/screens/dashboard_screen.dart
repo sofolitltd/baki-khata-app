@@ -5,6 +5,7 @@ import '../models.dart';
 import '../store.dart';
 import '../theme.dart';
 import '../utils.dart';
+import '../voice.dart';
 import 'customer_screen.dart';
 import 'entry_sheet.dart';
 import 'shell.dart';
@@ -222,6 +223,35 @@ class _HeroCard extends StatelessWidget {
                 style: const TextStyle(color: Colors.white70, fontSize: 15),
               ),
               const Spacer(),
+              InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: () => Voice.instance.say(
+                  context,
+                  summarySpeech(
+                    ledger: Store.instance.ledger,
+                    total: totalDue,
+                    people: people,
+                    overdue: overdue,
+                    collectedToday: collectedToday,
+                  ),
+                ),
+                child: Tooltip(
+                  message: 'শুনুন',
+                  child: Container(
+                    padding: const EdgeInsets.all(6),
+                    margin: const EdgeInsets.only(right: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: .15),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.volume_up_rounded,
+                      color: Colors.white,
+                      size: 18,
+                    ),
+                  ),
+                ),
+              ),
               Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 10,

@@ -5,6 +5,7 @@ import '../models.dart';
 import '../store.dart';
 import '../theme.dart';
 import '../utils.dart';
+import '../voice.dart';
 import 'customer_screen.dart';
 import 'shell.dart';
 
@@ -116,7 +117,14 @@ class _CustomersScreenState extends State<CustomersScreen> {
                       hintText: 'নাম বা মোবাইল দিয়ে খুঁজুন',
                       prefixIcon: const Icon(Icons.search_rounded),
                       suffixIcon: _search.text.isEmpty
-                          ? null
+                          ? MicButton(
+                              onText: (t) => setState(() {
+                                _search.text = t;
+                                _search.selection = TextSelection.collapsed(
+                                  offset: t.length,
+                                );
+                              }),
+                            )
                           : IconButton(
                               icon: const Icon(Icons.close_rounded),
                               onPressed: () => setState(() => _search.clear()),
