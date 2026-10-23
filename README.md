@@ -1,17 +1,33 @@
-# baki_khata
+# বাকির খাতা (Baki Khata)
 
-A new Flutter project.
+দোকানের পাওনা ও দেনার হিসাব রাখার অ্যান্ড্রয়েড অ্যাপ। Flutter, অফলাইন-ফার্স্ট (SQLite), চাইলে অনলাইন ব্যাকআপ ও সিঙ্ক।
 
-## Getting Started
+- সাইট ও ডাউনলোড: https://baki-khata-api-silk.vercel.app
+- সার্ভার (API): [sofolitltd/baki-khata-api](https://github.com/sofolitltd/baki-khata-api)
 
-This project is a starting point for a Flutter application.
+## সুবিধা
+- পাওনা ও দেনার আলাদা খাতা, বাকি/জমার লেনদেন
+- মেয়াদ ও রিমাইন্ডার নোটিফিকেশন, প্রতিদিন সকাল ৯টায় সারাংশ
+- এক ট্যাপে কল ও তাগাদা এসএমএস
+- রিপোর্ট ও পরিসংখ্যান
+- ফোন নাম্বার + ৫ ডিজিটের PIN লগইন
+- অফলাইনে চলে; ইন্টারনেট থাকলে সার্ভারে ব্যাকআপ ও সিঙ্ক
 
-A few resources to get you started if this is your first Flutter project:
+## চালানো
+```bash
+make run-e    # অ্যান্ড্রয়েড এমুলেটরে (সার্ভার: http://10.0.2.2:8080)
+make run-d    # আসল ফোনে (Mac-এর LAN IP দিয়ে সার্ভারে)
+make run      # লোকাল API সার্ভার চালু (../baki_khata_api দরকার)
+```
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+সার্ভারের ঠিকানা বদলাতে: `flutter run --dart-define=API_URL=https://...`
+রিলিজ বিল্ডে ডিফল্ট ঠিকানা [lib/config.dart](lib/config.dart)-এ।
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## রিলিজ বিল্ড
+`android/key.properties` (গিটে নেই) আর কীস্টোর থাকতে হবে, নইলে ডিবাগ কী দিয়ে সাইন হয়।
+
+```bash
+flutter build apk --release --split-per-abi
+```
+
+এরপর ভার্সন ট্যাগ (`vX.Y.Z`) দিয়ে GitHub Releases-এ APK আপলোড করা হয়।
