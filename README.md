@@ -1,8 +1,8 @@
-# বাকির খাতা (Baki Khata)
+# Baki Khata
 
 দোকানের পাওনা ও দেনার হিসাব রাখার অ্যান্ড্রয়েড অ্যাপ। Flutter, অফলাইন-ফার্স্ট (SQLite), চাইলে অনলাইন ব্যাকআপ ও সিঙ্ক।
 
-- সাইট ও ডাউনলোড: https://baki-khata-api-silk.vercel.app
+- সাইট ও ডাউনলোড: https://bakikhatabd.vercel.app
 - সার্ভার (API): [sofolitltd/baki-khata-api](https://github.com/sofolitltd/baki-khata-api)
 
 ## সুবিধা

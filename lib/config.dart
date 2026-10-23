@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart';
 const _env = String.fromEnvironment('API_URL');
 
 /// রিলিজ বিল্ডের ডিফল্ট সার্ভার।
-const _prodUrl = 'https://baki-khata-api-silk.vercel.app';
+const _prodUrl = 'https://bakikhatabd.vercel.app';
 
 String get apiBase {
   if (_env.isNotEmpty) return _env;

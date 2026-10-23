@@ -117,7 +117,7 @@ class _AuthScreenState extends State<AuthScreen> {
                   ),
                   const SizedBox(height: 16),
                   Text(
-                    _signUp ? 'নতুন অ্যাকাউন্ট খুলুন' : 'বাকির খাতায় লগইন',
+                    _signUp ? 'নতুন অ্যাকাউন্ট খুলুন' : 'Baki Khata-এ লগইন',
                     textAlign: TextAlign.center,
                     style: t.headlineSmall?.copyWith(
                       fontWeight: FontWeight.w700,

@@ -52,7 +52,7 @@ class _BakiKhataAppState extends State<BakiKhataApp>
     return ValueListenableBuilder(
       valueListenable: Store.instance.ledgerNotifier,
       builder: (context, ledger, _) => MaterialApp(
-        title: 'বাকির খাতা',
+        title: 'Baki Khata',
         debugShowCheckedModeBanner: false,
         theme: buildTheme(Brightness.light, ledger),
         darkTheme: buildTheme(Brightness.dark, ledger),

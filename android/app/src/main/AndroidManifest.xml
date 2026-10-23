@@ -5,7 +5,7 @@
     <uses-permission android:name="android.permission.VIBRATE"/>
     <uses-permission android:name="android.permission.READ_CONTACTS"/>
     <application
-        android:label="বাকির খাতা"
+        android:label="Baki Khata"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
