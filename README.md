@@ -17,7 +17,7 @@
 ```bash
 make run-e    # অ্যান্ড্রয়েড এমুলেটরে (সার্ভার: http://10.0.2.2:8080)
 make run-d    # আসল ফোনে (Mac-এর LAN IP দিয়ে সার্ভারে)
-make run      # লোকাল API সার্ভার চালু (../baki_khata_api দরকার)
+make run      # লোকাল API সার্ভার চালু (../baki-khata-api দরকার)
 ```
 
 সার্ভারের ঠিকানা বদলাতে: `flutter run --dart-define=API_URL=https://...`

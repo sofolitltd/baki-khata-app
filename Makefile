@@ -1,4 +1,4 @@
-API_DIR  := ../baki_khata_api
+API_DIR  := ../baki-khata-api
 EMULATOR := emulator-5554
 # Mac-এর LAN IP (আসল ফোন একই Wi-Fi তে থাকতে হবে)
 LAN_IP   := $(shell ipconfig getifaddr en0)
