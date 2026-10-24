@@ -10,6 +10,7 @@ import '../utils.dart';
 import '../voice.dart';
 import 'customer_picker.dart';
 import 'due_reminder.dart';
+import 'installment.dart';
 
 /// বাকি / জমা লেখার শিট।
 /// [customer] না দিলে নতুন (বা আগের) কাস্টমারের নাম লিখে সরাসরি বাকি লেখা যায় —
@@ -51,6 +52,9 @@ class _EntrySheetState extends State<_EntrySheet> {
 
   Customer? get _customer => widget.customer ?? _picked;
   bool get _isBaki => widget.type == EntryType.baki;
+
+  /// কিস্তি চললে তারিখ ও রিমাইন্ডার কিস্তি থেকেই আসে।
+  bool get _onPlan => _customer?.onPlan ?? false;
   LedgerText get _t => LedgerText.of(_customer?.ledger ?? _store.ledger);
 
   @override
@@ -94,6 +98,16 @@ class _EntrySheetState extends State<_EntrySheet> {
     if (amount == null || amount <= 0) {
       return toast(context, 'সঠিক টাকার পরিমাণ লিখুন');
     }
+
+    // কিছু সেভ হওয়ার আগেই, যাতে বাতিল করলে অর্ধেক কাজ না থাকে
+    DateTime? remindAt;
+    if (_isBaki && !_onPlan && _due != null && _remind) {
+      remindAt = await confirmReminderAt(context, _due!, _remindTime);
+      if (remindAt == null || !mounted) return;
+      await Notifier.requestPermission();
+    }
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
     setState(() => _saving = true);
 
     // একই নামে আগে কাস্টমার থাকলে নতুন করে না বানিয়ে সেটাই ব্যবহার
@@ -110,12 +124,6 @@ class _EntrySheetState extends State<_EntrySheet> {
     }
     id ??= await _store.addCustomer(name: _name.text, phones: [_phone.text]);
 
-    DateTime? remindAt;
-    if (_isBaki && _due != null && _remind) {
-      remindAt = reminderAt(_due!, _remindTime);
-      await Notifier.requestPermission();
-    }
-
     await _store.addEntry(
       customerId: id,
       type: widget.type,
@@ -124,8 +132,9 @@ class _EntrySheetState extends State<_EntrySheet> {
       note: _note.text,
       dueDate: _due,
       reminderAt: remindAt,
-      updateSchedule: _isBaki,
+      updateSchedule: _isBaki && !_onPlan,
     );
+    if (remindAt != null) showReminderSet(messenger, remindAt);
     if (mounted) Navigator.pop(context, true);
   }
 
@@ -173,6 +182,11 @@ class _EntrySheetState extends State<_EntrySheet> {
                     ],
                   ),
                 ),
+                IconButton(
+                  tooltip: 'বন্ধ করুন',
+                  icon: const Icon(Icons.close_rounded),
+                  onPressed: () => Navigator.pop(context),
+                ),
               ],
             ),
             const SizedBox(height: 20),
@@ -201,6 +215,8 @@ class _EntrySheetState extends State<_EntrySheet> {
               ],
               const SizedBox(height: 12),
             ],
+
+            if (_onPlan) ...[_planHint(cs), const SizedBox(height: 12)],
 
             TextField(
               controller: _amount,
@@ -278,7 +294,7 @@ class _EntrySheetState extends State<_EntrySheet> {
               ),
             ),
 
-            if (_isBaki) ...[
+            if (_isBaki && !_onPlan) ...[
               const SizedBox(height: 18),
               DueReminderFields(
                 label: _t.whenAsk,
@@ -312,6 +328,51 @@ class _EntrySheetState extends State<_EntrySheet> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// বাকিতে: কিস্তির বাইরে থাকবে। জমায়: এক চাপে চলতি কিস্তির টাকা।
+  Widget _planHint(ColorScheme cs) {
+    final c = _customer!;
+    final s = c.planStatus!;
+    final ask = s.behind > 0 ? s.behind : s.nextAmount;
+    if (!_isBaki) {
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: ActionChip(
+          avatar: const Icon(Icons.event_repeat_rounded, size: 18),
+          label: Text(
+            s.behind > 0
+                ? 'বকেয়া কিস্তি ${taka(ask)}'
+                : 'এই কিস্তি ${taka(ask)}',
+          ),
+          onPressed: () => setState(
+            () => _amount.text = ask == ask.roundToDouble()
+                ? ask.toStringAsFixed(0)
+                : ask.toStringAsFixed(2),
+          ),
+        ),
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: cs.primary.withValues(alpha: .08),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.info_outline_rounded, color: cs.primary, size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'কিস্তি চলছে (${planNextLine(c)})। এই ${_t.addTitle} কিস্তির '
+              'বাইরে আলাদা থাকবে।',
+              style: TextStyle(color: cs.primary),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -355,6 +416,17 @@ class _EntrySheetState extends State<_EntrySheet> {
           suffixIcon: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // লেখা থাকলে এক চাপে মুছে ফেলার ✕
+              ValueListenableBuilder(
+                valueListenable: controller,
+                builder: (context, v, _) => v.text.isEmpty
+                    ? const SizedBox.shrink()
+                    : IconButton(
+                        tooltip: 'মুছুন',
+                        icon: const Icon(Icons.close_rounded),
+                        onPressed: controller.clear,
+                      ),
+              ),
               IconButton(
                 tooltip: 'তালিকা থেকে বাছাই',
                 icon: const Icon(Icons.people_alt_outlined),

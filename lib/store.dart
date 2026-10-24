@@ -71,7 +71,7 @@ class Store extends ChangeNotifier {
       kIsWeb
           ? 'baki_khata.db'
           : p.join(await getDatabasesPath(), 'baki_khata.db'),
-      version: 6,
+      version: 7,
       onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
       onUpgrade: (db, oldVersion, _) async {
         if (oldVersion < 2) {
@@ -91,6 +91,11 @@ class Store extends ChangeNotifier {
           );
         }
         if (oldVersion < 6) await _createContactLogs(db);
+        if (oldVersion < 7) {
+          await db.execute(
+            "ALTER TABLE customers ADD COLUMN plan TEXT NOT NULL DEFAULT ''",
+          );
+        }
       },
       onCreate: (db, _) async {
         await db.execute('''
@@ -101,6 +106,7 @@ class Store extends ChangeNotifier {
             name TEXT NOT NULL,
             phone TEXT NOT NULL DEFAULT '',
             extra_phones TEXT NOT NULL DEFAULT '',
+            plan TEXT NOT NULL DEFAULT '',
             address TEXT NOT NULL DEFAULT '',
             photo TEXT NOT NULL DEFAULT '',
             due_date INTEGER,
@@ -192,10 +198,54 @@ class Store extends ChangeNotifier {
       WHERE c.deleted = 0
       GROUP BY c.id
     ''');
-    all = rows.map(Customer.fromMap).toList();
+    all = (await _withPlanPaid(rows)).map(Customer.fromMap).toList();
     loaded = true;
     notifyListeners();
     scheduleDaily();
+  }
+
+  /// কিস্তি চলছে এমন কাস্টমারদের, পরিকল্পনার দিন থেকে মোট জমা যোগ করে।
+  Future<List<Map<String, Object?>>> _withPlanPaid(
+    List<Map<String, Object?>> rows,
+  ) async {
+    final plans = <int, InstallmentPlan>{};
+    for (final r in rows) {
+      final p = InstallmentPlan.decode(r['plan'] as String?);
+      if (p != null) plans[r['id'] as int] = p;
+    }
+    if (plans.isEmpty) return rows;
+    final entries = await _db.query(
+      'entries',
+      columns: ['customer_id', 'amount', 'date'],
+      where:
+          "type = 'joma' AND deleted = 0 AND customer_id IN "
+          '(${List.filled(plans.length, '?').join(',')})',
+      whereArgs: plans.keys.toList(),
+    );
+    final paid = <int, double>{};
+    for (final e in entries) {
+      final id = e['customer_id'] as int;
+      final from = plans[id]!.from;
+      final day = DateTime(from.year, from.month, from.day);
+      if ((e['date'] as int) >= day.millisecondsSinceEpoch) {
+        paid[id] = (paid[id] ?? 0) + (e['amount'] as num).toDouble();
+      }
+    }
+    return [
+      for (final r in rows)
+        paid.containsKey(r['id']) ? {...r, 'plan_paid': paid[r['id']]} : r,
+    ];
+  }
+
+  /// কিস্তির পরিকল্পনা বসানো বা (null দিলে) বন্ধ করা।
+  Future<void> setPlan(int id, InstallmentPlan? plan) async {
+    await _db.update(
+      'customers',
+      _touch({'plan': plan?.encode() ?? ''}),
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    await _afterChange(id);
   }
 
   Customer? byId(int id) {
@@ -474,8 +524,39 @@ class Store extends ChangeNotifier {
     if (!c.hasDue && (c.dueDate != null || c.reminderAt != null)) {
       await _setSchedule(id, null, null);
       await refresh();
+    } else if (c.onPlan) {
+      await _followPlan(c);
     }
     await Notifier.schedule(byId(id)!);
+  }
+
+  /// কিস্তি চললে চলতি কিস্তির তারিখটাই "কবে দেবে" আর রিমাইন্ডার — তাই
+  /// জমা লিখলে পরের কিস্তির তারিখ নিজে থেকে বসে। রিমাইন্ডারের সময় আগেরটাই,
+  /// না থাকলে সকাল ১০টা।
+  Future<void> _followPlan(Customer c) async {
+    final next = c.planStatus!.nextDate;
+    final old = c.dueDate;
+    if (old != null &&
+        old.year == next.year &&
+        old.month == next.month &&
+        old.day == next.day) {
+      return;
+    }
+    final t = c.reminderAt;
+    final at = DateTime(
+      next.year,
+      next.month,
+      next.day,
+      t?.hour ?? 10,
+      t?.minute ?? 0,
+    );
+    // কিস্তির দিনের সময় পার হয়ে গেলে বাদ না দিয়ে পরদিন একই সময়ে
+    final now = DateTime.now();
+    final remind = at.isAfter(now)
+        ? at
+        : DateTime(now.year, now.month, now.day + 1, at.hour, at.minute);
+    await _setSchedule(c.id, next, remind);
+    await refresh();
   }
 
   /// সব কাস্টমারের সাম্প্রতিক লেনদেন (নামসহ)।
@@ -552,7 +633,7 @@ class Store extends ChangeNotifier {
       for (final m in customers.cast<Map<String, dynamic>>()) {
         final local = (await txn.query(
           'customers',
-          columns: ['id', 'updated_at', 'photo', 'extra_phones'],
+          columns: ['id', 'updated_at', 'photo', 'extra_phones', 'plan'],
           where: 'uid = ?',
           whereArgs: [m['uid']],
         )).firstOrNull;
@@ -564,6 +645,10 @@ class Store extends ChangeNotifier {
           'extra_phones': m.containsKey('extra_phones')
               ? (m['extra_phones'] ?? '')
               : (local?['extra_phones'] ?? ''),
+          // পুরোনো সার্ভার এই ঘর পাঠায় না — তখন লোকালটাই থাকে
+          'plan': m.containsKey('plan')
+              ? (m['plan'] ?? '')
+              : (local?['plan'] ?? ''),
           'address': m['address'],
           'due_date': m['due_date'],
           'reminder_at': m['reminder_at'],
@@ -690,6 +775,15 @@ class Store extends ChangeNotifier {
   }
 
   // ---------- পরিসংখ্যান ----------
+
+  /// সব কাস্টমারের রিমাইন্ডার আর রোজকার নোটিফিকেশন আবার বসানো
+  /// (যেমন ঠিক সময়ের অনুমতি পাওয়ার পর)।
+  Future<void> rescheduleAll() async {
+    for (final c in all) {
+      await Notifier.schedule(c);
+    }
+    await scheduleDaily();
+  }
 
   /// সকালের সারাংশ আর দিনের শেষের হিসাব — দুটো রোজকার নোটিফিকেশন নতুন
   /// করে বানায় (গতকাল ও আজকের লেনদেনসহ)।

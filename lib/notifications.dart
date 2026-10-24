@@ -50,6 +50,16 @@ class Notifier {
           openCustomer.value = int.tryParse(r.payload ?? ''),
     );
 
+    await refreshExact();
+    // সেটিংস থেকে অনুমতি দিয়ে ফিরলে নতুন করে সব রিমাইন্ডার ঠিক সময়ে বসানো
+    _lifecycle = AppLifecycleListener(
+      onResume: () async {
+        final was = exactAllowed.value;
+        await refreshExact();
+        if (!was && exactAllowed.value) onExactGranted?.call();
+      },
+    );
+
     final launch = await _plugin.getNotificationAppLaunchDetails();
     if (launch?.didNotificationLaunchApp ?? false) {
       openCustomer.value = int.tryParse(
@@ -58,15 +68,55 @@ class Notifier {
     }
   }
 
+  // ---------- ঠিক সময়ে রিমাইন্ডার ----------
+
+  static AndroidFlutterLocalNotificationsPlugin? get _android => _plugin
+      .resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin
+      >();
+
+  // ignore: unused_field — শোনার জন্য ধরে রাখা
+  static AppLifecycleListener? _lifecycle;
+
+  /// ফোন রিমাইন্ডার ঠিক সময়ে দিতে দেয় কি না (Android 12+-এ আলাদা অনুমতি,
+  /// "Alarms & reminders")। না দিলে ব্যাটারি বাঁচাতে কয়েক মিনিট দেরি হয়।
+  static final exactAllowed = ValueNotifier(false);
+
+  /// অনুমতি পাওয়ার পর আগের রিমাইন্ডারগুলো নতুন করে বসানোর হুক।
+  static VoidCallback? onExactGranted;
+
+  static AndroidScheduleMode get _mode => exactAllowed.value
+      ? AndroidScheduleMode.exactAllowWhileIdle
+      : AndroidScheduleMode.inexactAllowWhileIdle;
+
+  static Future<void> refreshExact() async {
+    if (kIsWeb || !Platform.isAndroid) return;
+    exactAllowed.value =
+        await _android?.canScheduleExactNotifications() ?? false;
+  }
+
+  /// সেটিংসের "Alarms & reminders" পাতা খোলে।
+  static Future<void> requestExact() async {
+    if (kIsWeb || !Platform.isAndroid) return;
+    await _android?.requestExactAlarmsPermission();
+    await refreshExact();
+  }
+
+  static const _kExactAsked = 'exact_asked';
+
   static Future<bool> requestPermission() async {
     if (kIsWeb) return false;
     if (Platform.isAndroid) {
-      return await _plugin
-              .resolvePlatformSpecificImplementation<
-                AndroidFlutterLocalNotificationsPlugin
-              >()
-              ?.requestNotificationsPermission() ??
-          true;
+      final ok = await _android?.requestNotificationsPermission() ?? true;
+      // প্রথম রিমাইন্ডারের সময় একবারই ঠিক সময়ের অনুমতি চাওয়া
+      final prefs = await SharedPreferences.getInstance();
+      if (ok &&
+          !exactAllowed.value &&
+          !(prefs.getBool(_kExactAsked) ?? false)) {
+        await prefs.setBool(_kExactAsked, true);
+        await requestExact();
+      }
+      return ok;
     }
     if (Platform.isIOS) {
       return await _plugin
@@ -110,7 +160,7 @@ class Notifier {
         ),
         iOS: DarwinNotificationDetails(),
       ),
-      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+      androidScheduleMode: _mode,
     );
   }
 
@@ -199,7 +249,7 @@ class Notifier {
           ),
           iOS: const DarwinNotificationDetails(),
         ),
-        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        androidScheduleMode: _mode,
       );
     }
   }
@@ -296,7 +346,7 @@ class Notifier {
           ),
           iOS: const DarwinNotificationDetails(),
         ),
-        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        androidScheduleMode: _mode,
       );
     }
   }

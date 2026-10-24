@@ -67,6 +67,23 @@ class ProfileScreen extends StatelessWidget {
               const SizedBox(height: 16),
               _section(context, 'নোটিফিকেশন', [
                 ValueListenableBuilder(
+                  valueListenable: Notifier.exactAllowed,
+                  builder: (context, exact, _) => ListTile(
+                    leading: Icon(
+                      exact ? Icons.alarm_on_rounded : Icons.alarm_off_rounded,
+                      color: exact ? null : Theme.of(context).colorScheme.error,
+                    ),
+                    title: const Text('ঠিক সময়ে রিমাইন্ডার'),
+                    subtitle: Text(
+                      exact ? 'চালু — রিমাইন্ডার ঠিক সময়েই আসবে' : 'বন্ধ — কয়েক মিনিট দেরিতে আসতে পারে। চালু করতে চাপুন',
+                    ),
+                    trailing: exact
+                        ? const Icon(Icons.check_circle_rounded)
+                        : const Text('চালু করুন'),
+                    onTap: exact ? null : Notifier.requestExact,
+                  ),
+                ),
+                ValueListenableBuilder(
                   valueListenable: Notifier.summaryTime,
                   builder: (context, t, _) => ListTile(
                     leading: const Icon(Icons.wb_sunny_rounded),

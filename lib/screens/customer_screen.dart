@@ -11,8 +11,10 @@ import '../theme.dart';
 import '../utils.dart';
 import '../voice.dart';
 import 'contact_log.dart';
+import 'customer_picker.dart';
 import 'due_reminder.dart';
 import 'entry_sheet.dart';
+import 'installment.dart';
 import 'shell.dart';
 import 'statement_share.dart';
 
@@ -240,6 +242,10 @@ class _CustomerScreenState extends State<CustomerScreen> {
             children: [
               _BalanceCard(customer: c, onReminder: () => _reminder(c)),
               const SizedBox(height: 12),
+              if (c.plan != null || c.hasDue) ...[
+                InstallmentCard(customer: c),
+                const SizedBox(height: 12),
+              ],
               Row(
                 children: [
                   _QuickAction(
@@ -591,7 +597,9 @@ class _EditEntrySheetState extends State<_EditEntrySheet> {
 
   /// বাকির এন্ট্রিতে কবে দেবে আর রিমাইন্ডারও বদলানো যায়।
   bool get _withDue =>
-      widget.entry.type == EntryType.baki && widget.customer != null;
+      widget.entry.type == EntryType.baki &&
+      widget.customer != null &&
+      !widget.customer!.onPlan;
   late DateTime? _due = _initialDue();
   // আগে তারিখ থাকলে রিমাইন্ডার যেমন ছিল তেমন; নতুন তারিখে ডিফল্ট চালু
   late bool _remind =
@@ -642,12 +650,16 @@ class _EditEntrySheetState extends State<_EditEntrySheet> {
     if (amount == null || amount <= 0) {
       return toast(context, 'সঠিক টাকার পরিমাণ লিখুন');
     }
+    DateTime? remindAt;
+    if (_withDue && _due != null && _remind) {
+      remindAt = await confirmReminderAt(context, _due!, _remindTime);
+      if (remindAt == null || !mounted) return;
+      await Notifier.requestPermission();
+    }
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
     setState(() => _saving = true);
     if (_withDue) {
-      final remindAt = _due != null && _remind
-          ? reminderAt(_due!, _remindTime)
-          : null;
-      if (remindAt != null) await Notifier.requestPermission();
       await Store.instance.setSchedule(widget.customer!.id, _due, remindAt);
     }
     await Store.instance.updateEntry(
@@ -656,6 +668,7 @@ class _EditEntrySheetState extends State<_EditEntrySheet> {
       date: _date,
       note: _note.text,
     );
+    if (remindAt != null) showReminderSet(messenger, remindAt);
     if (mounted) Navigator.pop(context, true);
   }
 
@@ -769,19 +782,14 @@ class _ReminderSheetState extends State<_ReminderSheet> {
     _time = r != null ? TimeOfDay.fromDateTime(r) : defaultReminderTime;
   }
 
-  DateTime get _at =>
-      DateTime(_due.year, _due.month, _due.day, _time.hour, _time.minute);
-
   Future<void> _save() async {
-    if (_at.isBefore(DateTime.now())) {
-      return toast(context, 'সময়টা পার হয়ে গেছে — পরের কোনো সময় দিন');
-    }
+    final at = await confirmReminderAt(context, _due, _time);
+    if (at == null || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
     await Notifier.requestPermission();
-    await Store.instance.setSchedule(widget.customer.id, _due, _at);
-    if (mounted) {
-      Navigator.pop(context);
-      toast(context, 'রিমাইন্ডার সেট হয়েছে: ${fmtDateTime(_at)}');
-    }
+    await Store.instance.setSchedule(widget.customer.id, _due, at);
+    showReminderSet(messenger, at);
+    if (mounted) Navigator.pop(context);
   }
 
   Future<void> _remove() async {
@@ -884,9 +892,16 @@ class _CustomerFormState extends State<_CustomerForm> {
   ];
   late String _photo = widget.customer?.photo ?? '';
   bool _saved = false;
+  final _nameFocus = FocusNode();
+
+  bool get _isNew => widget.customer == null;
+
+  /// আগে থেকে থাকা কাস্টমার বাছাই করলে নতুন না বানিয়ে তার পাতাই খোলে।
+  void _openExisting(Customer c) => Navigator.pop(context, c.id);
 
   @override
   void dispose() {
+    _nameFocus.dispose();
     _name.dispose();
     _phone.dispose();
     _address.dispose();
@@ -941,6 +956,101 @@ class _CustomerFormState extends State<_CustomerForm> {
       deletePhoto(previous);
     }
   }
+
+  /// নতুন বাকির শিটের মতো: মাইক, তালিকা থেকে বাছাই, আর লিখতে লিখতে আগের
+  /// একই রকম নাম দেখায় — যাতে একই মানুষ দুবার না বানানো হয়।
+  Widget _nameField() => RawAutocomplete<Customer>(
+    textEditingController: _name,
+    focusNode: _nameFocus,
+    displayStringForOption: (c) => c.name,
+    optionsBuilder: (v) {
+      final q = v.text.trim().toLowerCase();
+      if (!_isNew || q.isEmpty) return const Iterable<Customer>.empty();
+      return Store.instance.customers
+          .where(
+            (c) =>
+                c.name.toLowerCase().contains(q) ||
+                c.phones.any((p) => p.contains(q)),
+          )
+          .take(5);
+    },
+    onSelected: _openExisting,
+    fieldViewBuilder: (context, controller, focus, _) => TextField(
+      controller: controller,
+      focusNode: focus,
+      autofocus: _isNew,
+      textCapitalization: TextCapitalization.words,
+      decoration: InputDecoration(
+        hintText: 'নাম',
+        prefixIcon: const Icon(Icons.person_outline_rounded),
+        suffixIcon: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ValueListenableBuilder(
+              valueListenable: controller,
+              builder: (context, v, _) => v.text.isEmpty
+                  ? const SizedBox.shrink()
+                  : IconButton(
+                      tooltip: 'মুছুন',
+                      icon: const Icon(Icons.close_rounded),
+                      onPressed: controller.clear,
+                    ),
+            ),
+            if (_isNew)
+              IconButton(
+                tooltip: 'তালিকা থেকে বাছাই',
+                icon: const Icon(Icons.people_alt_outlined),
+                onPressed: () async {
+                  final c = await pickCustomer(context);
+                  if (c != null && mounted) _openExisting(c);
+                },
+              ),
+            MicButton(onFinal: (t) => controller.text = t, onText: (_) {}),
+          ],
+        ),
+      ),
+    ),
+    optionsViewBuilder: (context, onSelected, options) {
+      final cs = Theme.of(context).colorScheme;
+      return Align(
+        alignment: Alignment.topLeft,
+        child: Material(
+          elevation: 4,
+          borderRadius: BorderRadius.circular(14),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: 300,
+              maxWidth: MediaQuery.sizeOf(context).width - 40,
+            ),
+            child: ListView(
+              padding: EdgeInsets.zero,
+              shrinkWrap: true,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
+                  child: Text(
+                    'আগে থেকেই আছে — চাপলে তার খাতা খুলবে',
+                    style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                  ),
+                ),
+                for (final c in options)
+                  ListTile(
+                    leading: NameAvatar(c, radius: 18),
+                    title: Text(c.name),
+                    subtitle: Text(
+                      c.hasDue
+                          ? '${LedgerText.of(c.ledger).addTitle} ${taka(c.balance)}'
+                          : (c.phone.isEmpty ? '—' : c.phone),
+                    ),
+                    onTap: () => onSelected(c),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      );
+    },
+  );
 
   List<String> get _phones => [_phone.text, for (final c in _extra) c.text];
 
@@ -1001,11 +1111,23 @@ class _CustomerFormState extends State<_CustomerForm> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              widget.customer == null
-                  ? 'নতুন ${Store.instance.text.party}'
-                  : 'তথ্য এডিট',
-              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _isNew ? 'নতুন ${Store.instance.text.party}' : 'তথ্য এডিট',
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'বন্ধ করুন',
+                  icon: const Icon(Icons.close_rounded),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
             ),
             const SizedBox(height: 16),
             Center(
@@ -1052,15 +1174,7 @@ class _CustomerFormState extends State<_CustomerForm> {
               ),
             ),
             const SizedBox(height: 12),
-            TextField(
-              controller: _name,
-              autofocus: widget.customer == null,
-              textCapitalization: TextCapitalization.words,
-              decoration: const InputDecoration(
-                hintText: 'নাম',
-                prefixIcon: Icon(Icons.person_outline_rounded),
-              ),
-            ),
+            _nameField(),
             const SizedBox(height: 12),
             TextField(
               controller: _phone,

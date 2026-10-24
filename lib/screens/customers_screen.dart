@@ -8,10 +8,11 @@ import '../utils.dart';
 import '../voice.dart';
 import 'audio_list_sheet.dart';
 import 'customer_screen.dart';
+import 'installment.dart';
 import 'print_sheet.dart';
 import 'shell.dart';
 
-enum _Filter { due, overdue, today, upcoming, paid, all }
+enum _Filter { due, overdue, today, upcoming, plan, planBehind, paid, all }
 
 /// তালিকার ক্রম — সাম্প্রতিক লেনদেন, না টাকার অঙ্ক।
 enum _Sort { recent, high, low }
@@ -24,6 +25,8 @@ String _filterLabel(_Filter f) {
     _Filter.today =>
       Store.instance.ledger == Ledger.pabo ? 'আজ দেবে' : 'আজ দিতে হবে',
     _Filter.upcoming => 'সামনে',
+    _Filter.plan => 'কিস্তি চলছে',
+    _Filter.planBehind => 'কিস্তি পিছিয়ে',
     _Filter.paid => 'পরিশোধিত',
     _Filter.all => 'সবাই',
   };
@@ -57,6 +60,8 @@ class _CustomersScreenState extends State<CustomersScreen> {
       c.hasDue &&
           (dueStatus(c.dueDate) == DueStatus.soon ||
               dueStatus(c.dueDate) == DueStatus.later),
+    _Filter.plan => c.onPlan,
+    _Filter.planBehind => c.onPlan && c.planStatus!.behindCount > 0,
     _Filter.paid => !c.hasDue,
     _Filter.all => true,
   };
@@ -326,6 +331,11 @@ class CustomerCard extends StatelessWidget {
       subtitle = c.balance < 0
           ? LedgerText.of(c.ledger).advance
           : '${LedgerText.of(c.ledger).addTitle} নেই';
+    } else if (c.onPlan) {
+      final s = c.planStatus!;
+      subtitle = s.behindCount > 0
+          ? '${bn(s.behindCount)} কিস্তি পিছিয়ে • ${planNextLine(c)}'
+          : planNextLine(c);
     } else if (c.dueDate != null) {
       subtitle = dueLabel(c.dueDate!, c.ledger);
     } else {
@@ -386,9 +396,11 @@ class CustomerCard extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               fontSize: 13,
-                              color: c.hasDue
-                                  ? dueColor(context, c.dueDate)
-                                  : cs.onSurfaceVariant,
+                              color: !c.hasDue
+                                  ? cs.onSurfaceVariant
+                                  : c.onPlan && c.planStatus!.behindCount > 0
+                                  ? cs.error
+                                  : dueColor(context, c.dueDate),
                             ),
                           ),
                         ),

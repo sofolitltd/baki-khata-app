@@ -72,6 +72,15 @@ Future<void> callAndLog(BuildContext context, Customer c) async {
 /// বাকি থাকলে তাগাদার লেখা, না থাকলে ফাঁকা মেসেজ।
 String dueSmsBody(Customer c) {
   if (c.ledger != Ledger.pabo || !c.hasDue) return '';
+  if (c.onPlan) {
+    // পুরো অঙ্কের চেয়ে ছোট কিস্তির কথা বললে দেওয়া সহজ মনে হয়
+    final s = c.planStatus!;
+    // পিছিয়ে থাকলে তার মধ্যে চলতি কিস্তিও ধরা আছে
+    final amount = s.behind > 0 ? s.behind : s.nextAmount;
+    return 'আসসালামু আলাইকুম ${c.name}, আপনার কিস্তি ${taka(amount)} '
+        '${fmtDate(s.nextDate)} তারিখের মধ্যে দেওয়ার কথা। '
+        'মোট বাকি ${taka(c.balance)}। ধন্যবাদ।';
+  }
   final due = c.dueDate != null ? ' ${fmtDate(c.dueDate!)} তারিখের মধ্যে' : '';
   return 'আসসালামু আলাইকুম ${c.name}, দোকানে আপনার বাকি '
       '${taka(c.balance)}। অনুগ্রহ করে$due পরিশোধ করবেন। ধন্যবাদ।';

@@ -10,13 +10,71 @@ Future<TimeOfDay?> pickReminderTime(BuildContext context, TimeOfDay initial) =>
       helpText: 'রিমাইন্ডারের সময়',
     );
 
-/// তারিখ + সময় মিলিয়ে রিমাইন্ডার। সময় পার হয়ে গেলে এক ঘণ্টা পরে।
-DateTime reminderAt(DateTime due, TimeOfDay time) {
+/// তারিখ + সময় মিলিয়ে রিমাইন্ডার। সময়টা আগেই পার হয়ে গেলে চুপচাপ বদলে
+/// না দিয়ে জিজ্ঞেস করে কখন মনে করাবে। বাতিল করলে null — তখন সেভ থামে।
+Future<DateTime?> confirmReminderAt(
+  BuildContext context,
+  DateTime due,
+  TimeOfDay time,
+) async {
   final at = DateTime(due.year, due.month, due.day, time.hour, time.minute);
-  return at.isBefore(DateTime.now())
-      ? DateTime.now().add(const Duration(hours: 1))
-      : at;
+  final now = DateTime.now();
+  if (at.isAfter(now)) return at;
+  final options = [
+    ('১০ মিনিট পরে', now.add(const Duration(minutes: 10))),
+    ('১ ঘণ্টা পরে', now.add(const Duration(hours: 1))),
+    (
+      'আগামীকাল একই সময়ে',
+      DateTime(now.year, now.month, now.day + 1, time.hour, time.minute),
+    ),
+  ];
+  return showModalBottomSheet<DateTime>(
+    context: context,
+    useSafeArea: true,
+    showDragHandle: true,
+    builder: (ctx) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+            child: Text(
+              '⏰ ${fmtTime(time.hour, time.minute)} আজ পার হয়ে গেছে। '
+              'কখন মনে করাবো?',
+              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+            ),
+          ),
+          for (final (label, at) in options)
+            ListTile(
+              leading: const Icon(Icons.alarm_rounded),
+              title: Text(label),
+              subtitle: Text(reminderWhen(at)),
+              onTap: () => Navigator.pop(ctx, at),
+            ),
+        ],
+      ),
+    ),
+  );
 }
+
+/// "আজ বিকাল ৪:১০", "আগামীকাল সকাল ১০:০০", "১২ নভে, সকাল ১০:০০"।
+String reminderWhen(DateTime at) {
+  final d = daysUntil(at);
+  final day = d == 0
+      ? 'আজ'
+      : d == 1
+      ? 'আগামীকাল'
+      : '${fmtShortDate(at)},';
+  return '$day ${fmtTime(at.hour, at.minute)}';
+}
+
+/// সেভের পর নিচে জানিয়ে দেয় রিমাইন্ডার ঠিক কখন আসবে।
+void showReminderSet(ScaffoldMessengerState messenger, DateTime at) => messenger
+  ..hideCurrentSnackBar()
+  ..showSnackBar(
+    SnackBar(content: Text('রিমাইন্ডার আসবে: ${reminderWhen(at)}')),
+  );
 
 /// কবে দেবে / ফেরত দেব — তারিখ, রিমাইন্ডার চালু-বন্ধ আর তার সময়।
 class DueReminderFields extends StatelessWidget {

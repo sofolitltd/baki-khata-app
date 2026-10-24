@@ -18,7 +18,7 @@ Dart package name `baki_khata` and Android `applicationId` `com.sofolit.baki_kha
 - `bakikhata.vercel.app` is taken by someone else's "Coming Soon" project; couldn't be claimed.
 - Vercel: scope/team `sofolit` (SofolIT), project `baki-khata-api`, container deploy (`Dockerfile.vercel`), region `sin1`, GitHub-connected: **push to `main` auto-deploys**. CLI login must be the Sofolit account (`vercel login`, device flow); `gadget-doptor` team has an OLD `baki-khata-api` project that still needs deleting (not reachable with the current login).
 - Neon DB branch `production` (ap-southeast-1). Env on Vercel: `DATABASE_URL`, `JWT_SECRET` (production only).
-- Latest release: v1.1.0 (https://github.com/sofolitltd/baki-khata-app/releases). API is tagged too (`baki-khata-api` v1.1.0, Linux binary attached). Site's Download button -> `/download` -> 302 to `releases/latest/download/baki-khata.apk`.
+- Latest release: v1.2.0 (https://github.com/sofolitltd/baki-khata-app/releases). API is tagged with the same version (`baki-khata-api`, Linux binary attached; the user only wants Linux for Go and Android for Flutter). Site's Download button -> `/download` -> 302 to `releases/latest/download/baki-khata.apk`.
 
 ## Run locally
 - `baki-khata-app`: `make run-e` (emulator-5554, API at 10.0.2.2:8080), `make run-d [DEVICE=id]` (real phone via LAN IP), `make run` (starts API), `make devices`.
@@ -26,7 +26,7 @@ Dart package name `baki_khata` and Android `applicationId` `com.sofolit.baki_kha
 - Debug builds use localhost/10.0.2.2; **release builds default to `bakikhatabd.vercel.app`** (`lib/config.dart`), override with `--dart-define=API_URL=`.
 
 ## Release procedure (app)
-1. Bump `version:` in `pubspec.yaml` (currently 1.1.0+6).
+1. Bump `version:` in `pubspec.yaml` (currently 1.2.0+7).
 2. `flutter build apk --release --split-per-abi` (~3 min; run in background).
 3. Verify signature: `apksigner verify --print-certs` -> `CN=Baki Khata, O=Sofolit`.
 4. Copy to `baki-khata-vX.Y.Z-{arm64-v8a,armeabi-v7a,x86_64}.apk`, **plus `baki-khata.apk` (= arm64) — required, the website download link depends on this exact name**, plus `SHA256SUMS.txt`.
@@ -46,7 +46,14 @@ Signing: `android/key.properties` (gitignored) -> `~/.baki_khata/upload-keystore
 - DB v6: `customers.extra_phones` (newline-separated, max 2) and `contact_logs` (call/sms/visit/note history). Both sync; the app only pushes `contact_logs` after a pull response contains `logs` (old servers would drop them silently).
 - Printing (`lib/print_slips.dart`) and the statement image (`lib/statement_image.dart`) draw pages with Flutter's text engine into PNGs, because the `pdf` package can't shape Bangla conjuncts. PDF text is therefore not selectable.
 - Photo crop is pure Flutter (`lib/screens/crop_screen.dart`), no native cropper.
-- TTS splits mixed text by script (`splitByScript`) and reads English parts with an `en-IN` voice; falls back to Google TTS when the default engine lacks Bangla (manifest `<queries>` has TTS_SERVICE).
+- TTS reads everything with the Bangla voice (an English voice for English-written names was tried in v1.1.0 and sounded odd in the list player; v1.2.0 transliterates them instead). Falls back to Google TTS when the default engine lacks Bangla (manifest `<queries>` has TTS_SERVICE).
+
+## v1.2.0 additions
+- Installments (`lib/screens/installment.dart`): one plan per customer stored as JSON in `customers.plan` (DB v7, synced, old clients keep it). No separate rows: jomas dated on/after `plan.from` count toward it (`Store._withPlanPaid`). While a plan runs, `Store._followPlan` keeps the customer's due date/reminder on the current installment; new baki during a plan stays outside it.
+- Time picker is 12-hour: `lib/l10n.dart` overrides Flutter's bn `timeOfDayFormatRaw` (24h) and the app forces `alwaysUse24HourFormat: false`.
+- Past reminder times: `confirmReminderAt` asks (10 min / 1 hour / tomorrow) instead of silently shifting; saves show "রিমাইন্ডার আসবে: …".
+- Exact alarms: `SCHEDULE_EXACT_ALARM` declared; asked once on the first reminder, status/grant in Profile. On grant (detected on resume) `Store.rescheduleAll()` re-schedules in exact mode.
+- TTS: English-letter words are transliterated to Bangla for speech only (`banglaForSpeech`, rule-based + small word list) because the bn voice mangles Latin text.
 
 ## Gotchas hit this session
 - `vercel link` appended a `VERCEL_OIDC_TOKEN` to `baki-khata-api/.env.local` (gitignored; DB vars intact).

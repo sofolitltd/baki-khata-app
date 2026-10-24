@@ -328,6 +328,7 @@ class SyncService extends ChangeNotifier {
     'name': r['name'],
     'phone': r['phone'],
     'extra_phones': r['extra_phones'],
+    'plan': r['plan'],
     'address': r['address'],
     'photo': await photoToData(r['photo'] as String? ?? ''),
     'due_date': r['due_date'],

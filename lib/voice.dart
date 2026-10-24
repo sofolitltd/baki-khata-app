@@ -144,29 +144,152 @@ String takaWords(num amount) {
   return paisa > 0 ? '$t ${banglaWords(paisa)} পয়সা' : t;
 }
 
-/// লেখাকে বাংলা আর ইংরেজি অংশে ভাগ করে — প্রতিটা অংশ নিজের ভাষার ভয়েসে
-/// পড়া হয়। সংখ্যা, দাঁড়ি-কমা ইত্যাদি আগের অংশের সাথেই থাকে।
-List<({bool english, String text})> splitByScript(String s) {
-  final parts = <({bool english, String text})>[];
-  final buf = StringBuffer();
-  bool? lang; // এখনকার অংশের ভাষা; null = এখনো কোনো অক্ষর আসেনি
-  for (final r in s.runes) {
-    final english =
-        (r >= 0x41 && r <= 0x5A) || (r >= 0x61 && r <= 0x7A); // A-Z a-z
-    final bangla = r >= 0x0980 && r <= 0x09FF;
-    if ((english || bangla) && lang != null && lang != english) {
-      parts.add((english: lang, text: buf.toString()));
-      buf.clear();
-    }
-    if (english || bangla) lang = english;
-    buf.writeCharCode(r);
+// ---------- ইংরেজি অক্ষরের নাম → বাংলা অক্ষর (শুধু পড়ার জন্য) ----------
+
+/// নামে প্রায়ই আসে এমন শব্দ, যেগুলো নিয়মে ঠিক আসে না।
+const _phoneticWords = {
+  'md': 'মোহাম্মদ',
+  'mohammad': 'মোহাম্মদ',
+  'muhammad': 'মুহাম্মদ',
+  'mst': 'মোসাম্মৎ',
+  'store': 'স্টোর',
+  'stores': 'স্টোর',
+  'shop': 'শপ',
+  'traders': 'ট্রেডার্স',
+  'enterprise': 'এন্টারপ্রাইজ',
+  'bhai': 'ভাই',
+  'uncle': 'আঙ্কেল',
+  'aunty': 'আন্টি',
+  'sir': 'স্যার',
+  'madam': 'ম্যাডাম',
+  'boss': 'বস',
+  'new': 'নিউ',
+  'and': 'অ্যান্ড',
+};
+
+const _consonants = {
+  'chh': 'ছ',
+  'kh': 'খ',
+  'gh': 'ঘ',
+  'ng': 'ং',
+  'ch': 'চ',
+  'jh': 'ঝ',
+  'th': 'থ',
+  'dh': 'ধ',
+  'ph': 'ফ',
+  'bh': 'ভ',
+  'sh': 'শ',
+  'k': 'ক',
+  'g': 'গ',
+  'c': 'ক',
+  'j': 'জ',
+  't': 'ত',
+  'd': 'দ',
+  'n': 'ন',
+  'p': 'প',
+  'f': 'ফ',
+  'b': 'ব',
+  'm': 'ম',
+  'r': 'র',
+  'l': 'ল',
+  's': 'স',
+  'h': 'হ',
+  'z': 'জ',
+  'x': 'ক্স',
+  'v': 'ভ',
+  'q': 'ক',
+};
+
+/// (স্বাধীন রূপ, কার)
+const _vowels = {
+  'ee': ('ঈ', 'ী'),
+  'oo': ('উ', 'ু'),
+  'ou': ('ঔ', 'ৌ'),
+  'oi': ('ঐ', 'ৈ'),
+  'ai': ('আই', 'াই'),
+  'a': ('আ', 'া'),
+  'i': ('ই', 'ি'),
+  'u': ('উ', 'ু'),
+  'e': ('এ', 'ে'),
+  'o': ('ও', 'ো'),
+};
+
+String? _match(String w, int i, Map<String, Object> table) {
+  for (var len = 3; len >= 1; len--) {
+    if (i + len > w.length) continue;
+    final k = w.substring(i, i + len);
+    if (table.containsKey(k)) return k;
   }
-  if (buf.isNotEmpty) parts.add((english: lang ?? false, text: buf.toString()));
-  return parts;
+  return null;
 }
 
-/// ফোনের নিজস্ব TTS দিয়ে পড়ে শোনায় — বাংলা অংশ বাংলা ভয়েসে, ইংরেজি অংশ
-/// (যেমন ইংরেজিতে লেখা নাম) ইংরেজি ভয়েসে। ইন্টারনেট লাগে না (ভয়েস ফোনে থাকলে)।
+/// একটা ইংরেজি শব্দকে উচ্চারণ অনুযায়ী বাংলা অক্ষরে — Bablu → বাব্লু।
+String _phoneticWord(String word) {
+  final w = word.toLowerCase();
+  final known = _phoneticWords[w];
+  if (known != null) return known;
+  final out = StringBuffer();
+  // ব্যঞ্জনের পরে: পরের ব্যঞ্জনে যুক্তাক্ষর, পরের স্বরে কার
+  var afterConsonant = false;
+  // য়-এর পরে: পরের স্বরে কার, কিন্তু ব্যঞ্জনে যুক্তাক্ষর নয় (Rayhan → রায়হান)
+  var afterYa = false;
+  var i = 0;
+  while (i < w.length) {
+    final v = _match(w, i, _vowels);
+    if (v != null) {
+      final (alone, kar) = _vowels[v]!;
+      out.write(afterConsonant || afterYa ? kar : alone);
+      afterConsonant = afterYa = false;
+      i += v.length;
+      continue;
+    }
+    final ch = w[i];
+    final nextIsVowel = i + 1 < w.length && _match(w, i + 1, _vowels) != null;
+    if (ch == 'y' && afterConsonant) {
+      out.write('্য'); // য-ফলা
+      afterConsonant = false;
+      afterYa = true;
+      i++;
+      continue;
+    }
+    if (ch == 'w' && afterConsonant && i > 0 && w[i - 1] == 's') {
+      out.write('্ব'); // Swapan → স্বপন
+      afterConsonant = false;
+      afterYa = true;
+      i++;
+      continue;
+    }
+    if (ch == 'y' || ch == 'w') {
+      // Wahid → ওয়াহিদ, Anwar → আনওয়ার, Jewel → জেওয়েল
+      out.write(ch == 'w' && nextIsVowel ? 'ওয়' : (ch == 'w' ? 'ও' : 'য়'));
+      afterConsonant = false;
+      afterYa = ch == 'y' || nextIsVowel;
+      i++;
+      continue;
+    }
+    final c = _match(w, i, _consonants);
+    if (c == null) {
+      out.write(ch);
+      afterConsonant = afterYa = false;
+      i++;
+      continue;
+    }
+    if (afterConsonant && c != 'ng') out.write('্'); // যুক্তাক্ষর
+    out.write(_consonants[c]);
+    afterConsonant = c != 'ng';
+    afterYa = false;
+    i += c.length;
+  }
+  return out.toString();
+}
+
+/// লেখার ভেতরের ইংরেজি শব্দগুলো বাংলা অক্ষরে, যাতে বাংলা ভয়েস ভেঙে না পড়ে।
+String banglaForSpeech(String text) =>
+    text.replaceAllMapped(RegExp(r'[A-Za-z]+'), (m) => _phoneticWord(m[0]!));
+
+/// ফোনের নিজস্ব TTS দিয়ে পুরোটা বাংলা ভয়েসে পড়ে শোনায় — ইংরেজিতে লেখা নামও।
+/// (নামগুলো ইংরেজি ভয়েসে পড়লে তালিকা শুনতে অদ্ভুত লাগে।)
+/// ইন্টারনেট লাগে না (বাংলা ভয়েস ফোনে থাকলে)।
 class Voice {
   Voice._();
   static final Voice instance = Voice._();
@@ -174,37 +297,24 @@ class Voice {
   final FlutterTts _tts = FlutterTts();
   bool _ready = false;
 
-  static const _bnLanguages = ['bn-BD', 'bn-IN', 'bn'];
-  // বাংলাদেশি নাম ভারতীয় ইংরেজি উচ্চারণে বেশি স্বাভাবিক শোনায়
-  static const _enLanguages = ['en-IN', 'en-US', 'en-GB'];
+  static const _languages = ['bn-BD', 'bn-IN', 'bn'];
   static const _googleEngine = 'com.google.android.tts';
-
-  String? _bnLang, _enLang;
-  Map<String, String>? _bnVoice, _enVoice;
-
-  /// এখন কোন ভাষায় সেট করা আছে (true = ইংরেজি)।
-  bool? _current;
-
-  /// stop() ডাকলে বাড়ে — চলতি কয়েক অংশের পড়া মাঝপথে থেমে যায়।
-  int _gen = 0;
 
   Future<bool> _init() async {
     if (_ready) return true;
     try {
-      _bnLang = await _firstAvailable(_bnLanguages);
+      var lang = await _banglaLanguage();
       // ফোনের ডিফল্ট ইঞ্জিনে (যেমন Samsung) বাংলা না থাকলে Google-এরটায় যাওয়া
-      if (_bnLang == null && defaultTargetPlatform == TargetPlatform.android) {
+      if (lang == null && defaultTargetPlatform == TargetPlatform.android) {
         final engines = await _tts.getEngines;
         if (engines is List && engines.contains(_googleEngine)) {
           await _tts.setEngine(_googleEngine);
-          _bnLang = await _firstAvailable(_bnLanguages);
+          lang = await _banglaLanguage();
         }
       }
-      if (_bnLang == null) return false;
-      _enLang = await _firstAvailable(_enLanguages);
-      _bnVoice = await _bestVoice('bn', _bnLang!);
-      if (_enLang != null) _enVoice = await _bestVoice('en', _enLang!);
-      await _use(english: false);
+      if (lang == null) return false;
+      await _tts.setLanguage(lang);
+      await _pickBanglaVoice(lang);
       await _tts.setSpeechRate(0.45);
       await _tts.awaitSpeakCompletion(true);
       _ready = true;
@@ -214,47 +324,34 @@ class Voice {
     return true;
   }
 
-  Future<String?> _firstAvailable(List<String> languages) async {
-    for (final l in languages) {
+  Future<String?> _banglaLanguage() async {
+    for (final l in _languages) {
       if (await _tts.isLanguageAvailable(l) == true) return l;
     }
     return null;
   }
 
-  /// ইঞ্জিনের ডিফল্ট ভয়েস অনেক সময় ঠিক ভাষার হয় না — নিজে বাছাই,
+  /// ইঞ্জিনের ডিফল্ট ভয়েস অনেক সময় বাংলা হয় না — নিজে বাংলা ভয়েস বাছাই,
   /// ঠিক লোকেলের আর অফলাইনেরটা আগে।
-  Future<Map<String, String>?> _bestVoice(String prefix, String lang) async {
+  Future<void> _pickBanglaVoice(String lang) async {
     try {
       final voices = await _tts.getVoices;
-      if (voices is! List) return null;
+      if (voices is! List) return;
       String locale(Map v) => '${v['locale']}'.replaceAll('_', '-');
-      final matching = [
+      final bangla = [
         for (final v in voices)
-          if (v is Map && locale(v).toLowerCase().startsWith(prefix)) v,
+          if (v is Map && locale(v).toLowerCase().startsWith('bn')) v,
       ];
-      if (matching.isEmpty) return null;
+      if (bangla.isEmpty) return;
       int score(Map v) =>
           (locale(v) == lang ? 2 : 0) + (v['network_required'] == '1' ? 0 : 1);
-      matching.sort((a, b) => score(b).compareTo(score(a)));
-      final v = matching.first;
-      return {'name': '${v['name']}', 'locale': '${v['locale']}'};
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// ভাষা বদলায় (দরকার হলেই)। ইংরেজি ভয়েস না থাকলে বাংলাতেই পড়ে।
-  Future<void> _use({required bool english}) async {
-    if (english && _enLang == null) english = false;
-    if (_current == english) return;
-    await _tts.setLanguage(english ? _enLang! : _bnLang!);
-    final voice = english ? _enVoice : _bnVoice;
-    if (voice != null) await _tts.setVoice(voice);
-    _current = english;
+      bangla.sort((a, b) => score(b).compareTo(score(a)));
+      final v = bangla.first;
+      await _tts.setVoice({'name': '${v['name']}', 'locale': '${v['locale']}'});
+    } catch (_) {}
   }
 
   Future<void> stop() async {
-    _gen++;
     try {
       await _tts.stop();
     } catch (_) {}
@@ -267,14 +364,8 @@ class Voice {
   /// বা ত্রুটি হলে false।
   Future<bool> speak(String text) async {
     if (kIsWeb || !await _init()) return false;
-    final gen = _gen;
     try {
-      for (final part in splitByScript(text)) {
-        if (gen != _gen) break;
-        if (part.text.trim().isEmpty) continue;
-        await _use(english: part.english);
-        await _tts.speak(part.text);
-      }
+      await _tts.speak(banglaForSpeech(text));
       return true;
     } catch (_) {
       return false;

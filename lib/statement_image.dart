@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'auth.dart';
 import 'ledger.dart';
 import 'models.dart';
+import 'screens/installment.dart';
 import 'theme.dart';
 import 'utils.dart';
 
@@ -136,7 +137,11 @@ Future<Uint8List> renderStatement(Customer c, List<Entry> entries) async {
   if (c.dueDate != null && c.hasDue) {
     _text(
       canvas,
-      'দেওয়ার কথা: ${fmtDate(c.dueDate!)} (${dueLabel(c.dueDate!, c.ledger)})',
+      c.onPlan
+          ? 'কিস্তি: ${taka(c.plan!.amount)} ${planEveryLabel(c.plan!.every)} • '
+                '${bn(c.planStatus!.paidCount)}/${bn(c.plan!.count)} দেওয়া • '
+                'পরের: ${fmtShortDate(c.planStatus!.nextDate)}'
+          : 'দেওয়ার কথা: ${fmtDate(c.dueDate!)} (${dueLabel(c.dueDate!, c.ledger)})',
       Offset(box.left + 14, box.top + 48),
       width: box.width - 28,
       size: 12,

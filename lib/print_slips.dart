@@ -10,6 +10,7 @@ import 'package:printing/printing.dart' show Printing;
 import 'auth.dart';
 import 'ledger.dart';
 import 'models.dart';
+import 'screens/installment.dart';
 import 'store.dart';
 import 'theme.dart';
 import 'utils.dart';
@@ -336,7 +337,13 @@ class _SlipPainter {
         'শেষ ${_t.addTitle}: ${fmtDate(c.lastBakiAt!)} (${agoLabel(c.lastBakiAt!)})',
       );
     }
-    if (c.dueDate != null) {
+    if (c.onPlan) {
+      final s = c.planStatus!;
+      line(
+        'দেওয়ার কথা: ${planNextLine(c)}'
+        '${s.behindCount > 0 ? ' • ${bn(s.behindCount)} কিস্তি পিছিয়ে' : ''}',
+      );
+    } else if (c.dueDate != null) {
       line(
         'দেওয়ার কথা: ${fmtDate(c.dueDate!)} (${dueLabel(c.dueDate!, ledger)})',
       );
