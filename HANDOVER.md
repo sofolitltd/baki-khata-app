@@ -18,7 +18,7 @@ Dart package name `baki_khata` and Android `applicationId` `com.sofolit.baki_kha
 - `bakikhata.vercel.app` is taken by someone else's "Coming Soon" project; couldn't be claimed.
 - Vercel: scope/team `sofolit` (SofolIT), project `baki-khata-api`, container deploy (`Dockerfile.vercel`), region `sin1`, GitHub-connected: **push to `main` auto-deploys**. CLI login must be the Sofolit account (`vercel login`, device flow); `gadget-doptor` team has an OLD `baki-khata-api` project that still needs deleting (not reachable with the current login).
 - Neon DB branch `production` (ap-southeast-1). Env on Vercel: `DATABASE_URL`, `JWT_SECRET` (production only).
-- Latest release: v1.0.3 (https://github.com/sofolitltd/baki-khata-app/releases). Site's Download button -> `/download` -> 302 to `releases/latest/download/baki-khata.apk`.
+- Latest release: v1.1.0 (https://github.com/sofolitltd/baki-khata-app/releases). API is tagged too (`baki-khata-api` v1.1.0, Linux binary attached). Site's Download button -> `/download` -> 302 to `releases/latest/download/baki-khata.apk`.
 
 ## Run locally
 - `baki-khata-app`: `make run-e` (emulator-5554, API at 10.0.2.2:8080), `make run-d [DEVICE=id]` (real phone via LAN IP), `make run` (starts API), `make devices`.
@@ -26,7 +26,7 @@ Dart package name `baki_khata` and Android `applicationId` `com.sofolit.baki_kha
 - Debug builds use localhost/10.0.2.2; **release builds default to `bakikhatabd.vercel.app`** (`lib/config.dart`), override with `--dart-define=API_URL=`.
 
 ## Release procedure (app)
-1. Bump `version:` in `pubspec.yaml` (currently 1.0.3+4).
+1. Bump `version:` in `pubspec.yaml` (currently 1.1.0+6).
 2. `flutter build apk --release --split-per-abi` (~3 min; run in background).
 3. Verify signature: `apksigner verify --print-certs` -> `CN=Baki Khata, O=Sofolit`.
 4. Copy to `baki-khata-vX.Y.Z-{arm64-v8a,armeabi-v7a,x86_64}.apk`, **plus `baki-khata.apk` (= arm64) — required, the website download link depends on this exact name**, plus `SHA256SUMS.txt`.
@@ -34,13 +34,19 @@ Dart package name `baki_khata` and Android `applicationId` `com.sofolit.baki_kha
 Signing: `android/key.properties` (gitignored) -> `~/.baki_khata/upload-keystore.jks`. **Back this up off-machine; losing it means no more updates for installed apps.** Without key.properties the build silently signs with the debug key.
 
 ## Architecture notes
-- Notifications are 100% local (`flutter_local_notifications`, scheduled from SQLite data; daily 9:00 summary for next 7 days). No FCM/server push.
+- Notifications are 100% local (`flutter_local_notifications`, scheduled from SQLite data). No FCM/server push. Per-customer reminders (default 10:00, time pickable everywhere via `lib/screens/due_reminder.dart`), morning summary (default 10:00, every day) and end-of-day recap (default 22:00; a time before 05:00 reports the previous day). Times live in SharedPreferences, editable in Profile. Text is fixed at schedule time, so `Store.scheduleDaily()` rebuilds both daily notifications on every data change.
 - Sync: `lib/sync.dart`. PIN is kept in `flutter_secure_storage` so the app can (re)login silently (offline-at-login, expired 90-day JWT). Wrong PIN clears it and the sheet asks for PIN once. Sheet shows last sync time (persisted) + pushed/pulled counts.
 - Auth lockout server-side: 5 wrong PINs -> 15 min lock. bcrypt PIN hashes.
 - Voice (v1.0.3): `lib/voice.dart` — TTS (`flutter_tts`, bn-BD, Bangla number words) on home hero + customer screen; `MicButton` (`speech_to_text`) on customers search, entry amount (parses spoken Bangla numbers), note, name. Needs RECORD_AUDIO (declared). Depends on Google speech/TTS having Bangla on the device.
 - Calls/SMS go through `callPhone`/`sendSms` in `lib/utils.dart` (manifest `<queries>` for tel/sms/RecognitionService already present).
 - Landing is embedded in the Go binary (`landing.go`, `go:embed`). **`Dockerfile.vercel` copies landing files explicitly — add any new landing file there and to the embed directive.** Gin `GET` routes don't answer HEAD (use GET when testing).
 - Same Neon DB is used by local API runs and prod — don't write demo data through the API.
+
+## v1.1.0 additions
+- DB v6: `customers.extra_phones` (newline-separated, max 2) and `contact_logs` (call/sms/visit/note history). Both sync; the app only pushes `contact_logs` after a pull response contains `logs` (old servers would drop them silently).
+- Printing (`lib/print_slips.dart`) and the statement image (`lib/statement_image.dart`) draw pages with Flutter's text engine into PNGs, because the `pdf` package can't shape Bangla conjuncts. PDF text is therefore not selectable.
+- Photo crop is pure Flutter (`lib/screens/crop_screen.dart`), no native cropper.
+- TTS splits mixed text by script (`splitByScript`) and reads English parts with an `en-IN` voice; falls back to Google TTS when the default engine lacks Bangla (manifest `<queries>` has TTS_SERVICE).
 
 ## Gotchas hit this session
 - `vercel link` appended a `VERCEL_OIDC_TOKEN` to `baki-khata-api/.env.local` (gitignored; DB vars intact).

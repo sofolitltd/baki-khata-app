@@ -57,9 +57,13 @@ class _ShellState extends State<Shell> {
           children: [
             const SafeArea(bottom: false, child: LedgerSwitch()),
             Expanded(
-              child: MediaQuery.removePadding(
-                context: context,
-                removeTop: true,
+              // উপরের প্যাডিং খাতা-সুইচ নিয়ে নেয়। বাইরের Scaffold কিবোর্ডের
+              // জায়গাও আগেই ছেড়ে দেয়; ভেতরের ট্যাবের Scaffold আবার ছাড়লে
+              // নিচের অংশ ফাঁকা হয়ে যায়।
+              child: MediaQuery(
+                data: MediaQuery.of(context)
+                    .removePadding(removeTop: true)
+                    .removeViewInsets(removeBottom: true),
                 child: IndexedStack(
                   index: _tab,
                   children: [

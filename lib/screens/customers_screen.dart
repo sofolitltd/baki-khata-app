@@ -6,10 +6,15 @@ import '../store.dart';
 import '../theme.dart';
 import '../utils.dart';
 import '../voice.dart';
+import 'audio_list_sheet.dart';
 import 'customer_screen.dart';
+import 'print_sheet.dart';
 import 'shell.dart';
 
 enum _Filter { due, overdue, today, upcoming, paid, all }
+
+/// তালিকার ক্রম — সাম্প্রতিক লেনদেন, না টাকার অঙ্ক।
+enum _Sort { recent, high, low }
 
 String _filterLabel(_Filter f) {
   final t = Store.instance.text;
@@ -35,7 +40,8 @@ class CustomersScreen extends StatefulWidget {
 class _CustomersScreenState extends State<CustomersScreen> {
   final _store = Store.instance;
   final _search = TextEditingController();
-  _Filter _filter = _Filter.due;
+  _Filter _filter = _Filter.all;
+  _Sort _sort = _Sort.recent;
 
   @override
   void dispose() {
@@ -59,27 +65,102 @@ class _CustomersScreenState extends State<CustomersScreen> {
     final q = toEnDigits(_search.text.trim().toLowerCase());
     final list = _store.customers.where((c) {
       if (q.isNotEmpty) {
-        return c.name.toLowerCase().contains(q) || c.phone.contains(q);
+        return c.name.toLowerCase().contains(q) ||
+            c.phones.any((p) => p.contains(q));
       }
       return _matches(c, _filter);
     }).toList();
 
-    // বাকি আছে এমনরা আগে; তাদের মধ্যে যার তারিখ আগে, তারপর বেশি বাকি
-    int rank(Customer c) => c.dueDate == null
-        ? 1 << 30
-        : DateUtils.dateOnly(c.dueDate!).millisecondsSinceEpoch ~/ 86400000;
-    list.sort((a, b) {
-      if (a.hasDue != b.hasDue) return a.hasDue ? -1 : 1;
-      if (!a.hasDue) {
-        return (b.lastEntryAt ?? b.createdAt).compareTo(
-          a.lastEntryAt ?? a.createdAt,
-        );
-      }
-      final r = rank(a).compareTo(rank(b));
-      return r != 0 ? r : b.balance.compareTo(a.balance);
-    });
+    int recent(Customer a, Customer b) =>
+        (b.lastEntryAt ?? b.createdAt).compareTo(a.lastEntryAt ?? a.createdAt);
+    list.sort(
+      (a, b) => switch (_sort) {
+        _Sort.recent => recent(a, b),
+        _Sort.high => b.balance.compareTo(a.balance),
+        _Sort.low => a.balance.compareTo(b.balance),
+      },
+    );
     return list;
   }
+
+  Future<void> _pickFilter() async {
+    final f = await showModalBottomSheet<_Filter>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => SafeArea(
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _sheetLabel(ctx, 'সাজানো'),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  // ক্রম বদলালে শিট খোলা থাকে, যাতে ফিল্টারও বাছাই করা যায়
+                  child: SegmentedButton<_Sort>(
+                    showSelectedIcon: false,
+                    segments: const [
+                      ButtonSegment(
+                        value: _Sort.recent,
+                        label: Text('সাম্প্রতিক'),
+                      ),
+                      ButtonSegment(
+                        value: _Sort.high,
+                        icon: Icon(Icons.south_rounded, size: 16),
+                        label: Text('টাকা বেশি'),
+                      ),
+                      ButtonSegment(
+                        value: _Sort.low,
+                        icon: Icon(Icons.north_rounded, size: 16),
+                        label: Text('টাকা কম'),
+                      ),
+                    ],
+                    selected: {_sort},
+                    onSelectionChanged: (v) {
+                      setState(() => _sort = v.first);
+                      setSheet(() {});
+                    },
+                  ),
+                ),
+                _sheetLabel(ctx, 'ফিল্টার'),
+                for (final f in _Filter.values)
+                  ListTile(
+                    leading: Icon(
+                      f == _filter
+                          ? Icons.radio_button_checked_rounded
+                          : Icons.radio_button_unchecked_rounded,
+                      color: f == _filter
+                          ? Theme.of(ctx).colorScheme.primary
+                          : null,
+                    ),
+                    title: Text(_filterLabel(f)),
+                    trailing: Text(
+                      bn(_store.customers.where((c) => _matches(c, f)).length),
+                    ),
+                    onTap: () => Navigator.pop(ctx, f),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (f != null) setState(() => _filter = f);
+  }
+
+  Widget _sheetLabel(BuildContext context, String text) => Padding(
+    padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+    child: Text(
+      text,
+      style: TextStyle(
+        fontWeight: FontWeight.w600,
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -96,6 +177,18 @@ class _CustomersScreenState extends State<CustomersScreen> {
             title: Text(_store.text.partyPlural),
             actions: [
               IconButton(
+                tooltip: 'তালিকা শুনুন',
+                icon: const Icon(Icons.volume_up_rounded),
+                onPressed: list.isEmpty
+                    ? null
+                    : () => showAudioListSheet(context, list),
+              ),
+              IconButton(
+                tooltip: '${_store.text.addTitle}র তালিকা প্রিন্ট',
+                icon: const Icon(Icons.print_outlined),
+                onPressed: () => showPrintSheet(context),
+              ),
+              IconButton(
                 tooltip: 'নতুন ${_store.text.party}',
                 icon: const Icon(Icons.person_add_alt_1_rounded),
                 onPressed: () async {
@@ -110,52 +203,54 @@ class _CustomersScreenState extends State<CustomersScreen> {
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                  child: TextField(
-                    controller: _search,
-                    onChanged: (_) => setState(() {}),
-                    decoration: InputDecoration(
-                      hintText: 'নাম বা মোবাইল দিয়ে খুঁজুন',
-                      prefixIcon: const Icon(Icons.search_rounded),
-                      suffixIcon: _search.text.isEmpty
-                          ? MicButton(
-                              onText: (t) => setState(() {
-                                _search.text = t;
-                                _search.selection = TextSelection.collapsed(
-                                  offset: t.length,
-                                );
-                              }),
-                            )
-                          : IconButton(
-                              icon: const Icon(Icons.close_rounded),
-                              onPressed: () => setState(() => _search.clear()),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _search,
+                          onChanged: (_) => setState(() {}),
+                          decoration: InputDecoration(
+                            hintText: 'নাম বা মোবাইল দিয়ে খুঁজুন',
+                            prefixIcon: const Icon(Icons.search_rounded),
+                            suffixIcon: _search.text.isEmpty
+                                ? MicButton(
+                                    onText: (t) => setState(() {
+                                      _search.text = t;
+                                      _search.selection =
+                                          TextSelection.collapsed(
+                                            offset: t.length,
+                                          );
+                                    }),
+                                  )
+                                : IconButton(
+                                    icon: const Icon(Icons.close_rounded),
+                                    onPressed: () =>
+                                        setState(() => _search.clear()),
+                                  ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Badge(
+                        isLabelVisible:
+                            _filter != _Filter.all || _sort != _Sort.recent,
+                        smallSize: 10,
+                        child: IconButton.filledTonal(
+                          tooltip: 'ফিল্টার',
+                          style: IconButton.styleFrom(
+                            fixedSize: const Size(52, 52),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
                             ),
-                    ),
+                          ),
+                          onPressed: _pickFilter,
+                          icon: const Icon(Icons.tune_rounded),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
-              if (_search.text.isEmpty)
-                SliverToBoxAdapter(
-                  child: SizedBox(
-                    height: 48,
-                    child: ListView(
-                      scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      children: [
-                        for (final f in _Filter.values)
-                          Padding(
-                            padding: const EdgeInsets.only(right: 8),
-                            child: ChoiceChip(
-                              label: Text(
-                                '${_filterLabel(f)} ${bn(_store.customers.where((c) => _matches(c, f)).length)}',
-                              ),
-                              selected: _filter == f,
-                              onSelected: (_) => setState(() => _filter = f),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
               if (list.isNotEmpty && sum > 0)
                 SliverToBoxAdapter(
                   child: Padding(
@@ -163,7 +258,13 @@ class _CustomersScreenState extends State<CustomersScreen> {
                     child: Row(
                       children: [
                         Text(
-                          '${bn(list.length)} জন',
+                          [
+                            if (_search.text.isEmpty && _filter != _Filter.all)
+                              _filterLabel(_filter),
+                            if (_sort == _Sort.high) 'বেশি টাকা আগে',
+                            if (_sort == _Sort.low) 'কম টাকা আগে',
+                            '${bn(list.length)} জন',
+                          ].join(' • '),
                           style: TextStyle(
                             color: Theme.of(context)
                                 .colorScheme
@@ -196,7 +297,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
                   sliver: SliverList.separated(
                     itemCount: list.length,
                     separatorBuilder: (_, _) => const SizedBox(height: 8),
-                    itemBuilder: (_, i) => _CustomerTile(customer: list[i]),
+                    itemBuilder: (_, i) => CustomerCard(customer: list[i]),
                   ),
                 ),
             ],
@@ -207,9 +308,13 @@ class _CustomersScreenState extends State<CustomersScreen> {
   }
 }
 
-class _CustomerTile extends StatelessWidget {
-  const _CustomerTile({required this.customer});
+/// কাস্টমারের কার্ড — তালিকা ও হোমের খোঁজে একই রকম।
+class CustomerCard extends StatelessWidget {
+  const CustomerCard({super.key, required this.customer, this.onTap});
   final Customer customer;
+
+  /// না দিলে কাস্টমারের খাতা খোলে।
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -234,7 +339,7 @@ class _CustomerTile extends StatelessWidget {
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
-        onTap: () => openCustomer(context, c.id),
+        onTap: onTap ?? () => openCustomer(context, c.id),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           child: Row(
@@ -254,6 +359,16 @@ class _CustomerTile extends StatelessWidget {
                         fontWeight: FontWeight.w600,
                       ),
                     ),
+                    if (c.hasDue && c.lastBakiAt != null)
+                      Text(
+                        lastBakiLabel(c),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
                     Row(
                       children: [
                         if (reminderOn) ...[

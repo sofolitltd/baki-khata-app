@@ -1,20 +1,26 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/painting.dart';
+import 'package:flutter/widgets.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import 'screens/crop_screen.dart';
+
 /// সর্বোচ্চ ছবির সাইজ (বাইট) — ১০০ KB।
 const maxPhotoBytes = 100 * 1024;
 
-/// ছবি তুলে/বাছাই করে ১০০ KB-র নিচে নামা পর্যন্ত কোয়ালিটি ও মাপ কমিয়ে
-/// কম্প্রেস করে রাখে। মোবাইলে অ্যাপের নিজস্ব ফোল্ডারে ফাইল হিসেবে,
+/// ছবি তুলে/বাছাই করে বর্গাকারে কাটতে দেয়, তারপর ১০০ KB-র নিচে নামা পর্যন্ত
+/// কোয়ালিটি ও মাপ কমিয়ে কম্প্রেস করে রাখে। মোবাইলে অ্যাপের নিজস্ব ফোল্ডারে ফাইল হিসেবে,
 /// ওয়েবে base64 data URI হিসেবে ডাটাবেসেই। বাতিল করলে null।
-Future<String?> pickCompressedPhoto(ImageSource source) async {
+Future<String?> pickCompressedPhoto(
+  BuildContext context,
+  ImageSource source,
+) async {
   final original = await ImagePicker().pickImage(
     source: source,
     maxWidth: 1280,
@@ -22,7 +28,11 @@ Future<String?> pickCompressedPhoto(ImageSource source) async {
     preferredCameraDevice: CameraDevice.rear,
   );
   if (original == null) return null;
-  final picked = await compute(_shrink, await original.readAsBytes());
+  final bytes = await original.readAsBytes();
+  if (!context.mounted) return null;
+  final crop = await cropSquare(context, bytes);
+  if (crop == null) return null;
+  final picked = await compute(_shrink, (bytes, crop));
 
   if (kIsWeb) {
     return 'data:image/jpeg;base64,${base64Encode(picked)}';
@@ -84,9 +94,18 @@ Future<void> deletePhoto(String path) async {
   } catch (_) {}
 }
 
-/// JPEG [maxPhotoBytes]-এর নিচে না নামা পর্যন্ত আগে কোয়ালিটি, তারপর মাপ কমায়।
-Uint8List _shrink(Uint8List src) {
+/// বাছাই করা অংশ কেটে, JPEG [maxPhotoBytes]-এর নিচে না নামা পর্যন্ত আগে
+/// কোয়ালিটি, তারপর মাপ কমায়।
+Uint8List _shrink((Uint8List, Rect) args) {
+  final (src, crop) = args;
   var image = img.bakeOrientation(img.decodeImage(src)!);
+  image = img.copyCrop(
+    image,
+    x: crop.left.round(),
+    y: crop.top.round(),
+    width: math.max(1, crop.width.round()),
+    height: math.max(1, crop.height.round()),
+  );
   const longSide = 640;
   if (image.width > longSide || image.height > longSide) {
     image = img.copyResize(

@@ -71,7 +71,7 @@ class Store extends ChangeNotifier {
       kIsWeb
           ? 'baki_khata.db'
           : p.join(await getDatabasesPath(), 'baki_khata.db'),
-      version: 4,
+      version: 6,
       onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
       onUpgrade: (db, oldVersion, _) async {
         if (oldVersion < 2) {
@@ -85,6 +85,12 @@ class Store extends ChangeNotifier {
             "ALTER TABLE customers ADD COLUMN ledger TEXT NOT NULL DEFAULT 'pabo'",
           );
         }
+        if (oldVersion < 5) {
+          await db.execute(
+            "ALTER TABLE customers ADD COLUMN extra_phones TEXT NOT NULL DEFAULT ''",
+          );
+        }
+        if (oldVersion < 6) await _createContactLogs(db);
       },
       onCreate: (db, _) async {
         await db.execute('''
@@ -94,6 +100,7 @@ class Store extends ChangeNotifier {
             ledger TEXT NOT NULL DEFAULT 'pabo',
             name TEXT NOT NULL,
             phone TEXT NOT NULL DEFAULT '',
+            extra_phones TEXT NOT NULL DEFAULT '',
             address TEXT NOT NULL DEFAULT '',
             photo TEXT NOT NULL DEFAULT '',
             due_date INTEGER,
@@ -120,9 +127,30 @@ class Store extends ChangeNotifier {
         await db.execute(
           'CREATE INDEX idx_entries_customer ON entries(customer_id)',
         );
+        await _createContactLogs(db);
       },
     );
     await refresh();
+  }
+
+  /// কল/মেসেজ/তাগাদার ইতিহাস (v6)।
+  static Future<void> _createContactLogs(Database db) async {
+    await db.execute('''
+      CREATE TABLE contact_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        uid TEXT NOT NULL UNIQUE,
+        customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+        customer_uid TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        note TEXT NOT NULL DEFAULT '',
+        at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        deleted INTEGER NOT NULL DEFAULT 0,
+        dirty INTEGER NOT NULL DEFAULT 1
+      )''');
+    await db.execute(
+      'CREATE INDEX idx_contact_logs_customer ON contact_logs(customer_id)',
+    );
   }
 
   /// পুরনো (v2) ডাটাবেসে সিঙ্ক-কলাম যোগ ও আগের ডাটায় uid বসানো।
@@ -157,7 +185,8 @@ class Store extends ChangeNotifier {
     final rows = await _db.rawQuery('''
       SELECT c.*,
         COALESCE(SUM(CASE WHEN e.type = 'baki' THEN e.amount ELSE -e.amount END), 0) AS balance,
-        MAX(e.date) AS last_entry_at
+        MAX(e.date) AS last_entry_at,
+        MAX(CASE WHEN e.type = 'baki' THEN e.date END) AS last_baki_at
       FROM customers c
       LEFT JOIN entries e ON e.customer_id = c.id AND e.deleted = 0
       WHERE c.deleted = 0
@@ -166,7 +195,7 @@ class Store extends ChangeNotifier {
     all = rows.map(Customer.fromMap).toList();
     loaded = true;
     notifyListeners();
-    Notifier.scheduleDailySummaries(all);
+    scheduleDaily();
   }
 
   Customer? byId(int id) {
@@ -182,7 +211,8 @@ class Store extends ChangeNotifier {
   Future<int> pendingSyncCount() async {
     final r = await _db.rawQuery(
       'SELECT (SELECT COUNT(*) FROM customers WHERE dirty = 1) + '
-      '(SELECT COUNT(*) FROM entries WHERE dirty = 1) AS n',
+      '(SELECT COUNT(*) FROM entries WHERE dirty = 1) + '
+      '(SELECT COUNT(*) FROM contact_logs WHERE dirty = 1) AS n',
     );
     return r.first['n'] as int;
   }
@@ -199,7 +229,7 @@ class Store extends ChangeNotifier {
 
   Future<int> addCustomer({
     required String name,
-    String phone = '',
+    List<String> phones = const [],
     String address = '',
     String photo = '',
   }) async {
@@ -209,7 +239,7 @@ class Store extends ChangeNotifier {
         'uid': newUid(),
         'ledger': ledger.name,
         'name': name.trim(),
-        'phone': phone.trim(),
+        ..._phoneColumns(phones),
         'address': address.trim(),
         'photo': photo,
         'created_at': _now(),
@@ -222,7 +252,7 @@ class Store extends ChangeNotifier {
   Future<void> updateCustomer(
     int id, {
     required String name,
-    String phone = '',
+    List<String> phones = const [],
     String address = '',
     String photo = '',
   }) async {
@@ -232,7 +262,7 @@ class Store extends ChangeNotifier {
       'customers',
       _touch({
         'name': name.trim(),
-        'phone': phone.trim(),
+        ..._phoneColumns(phones),
         'address': address.trim(),
         'photo': photo,
       }),
@@ -240,6 +270,15 @@ class Store extends ChangeNotifier {
       whereArgs: [id],
     );
     await _afterChange(id);
+  }
+
+  /// প্রথম নম্বরটা মূল, বাকিগুলো বাড়তি; ফাঁকা ঘর বাদ।
+  static Map<String, Object?> _phoneColumns(List<String> phones) {
+    final list = splitPhones(joinPhones(phones));
+    return {
+      'phone': list.firstOrNull ?? '',
+      'extra_phones': joinPhones(list.skip(1).take(maxExtraPhones)),
+    };
   }
 
   Future<void> deleteCustomer(int id) async {
@@ -252,17 +291,94 @@ class Store extends ChangeNotifier {
         where: 'id = ?',
         whereArgs: [id],
       );
-      await txn.update(
-        'entries',
-        _touch({'deleted': 1}),
-        where: 'customer_id = ? AND deleted = 0',
-        whereArgs: [id],
-      );
+      for (final t in ['entries', 'contact_logs']) {
+        await txn.update(
+          t,
+          _touch({'deleted': 1}),
+          where: 'customer_id = ? AND deleted = 0',
+          whereArgs: [id],
+        );
+      }
     });
     await Notifier.cancel(id);
     await refresh();
     onLocalChange?.call();
   }
+
+  // ---------- যোগাযোগের ইতিহাস ----------
+
+  Future<List<ContactLog>> logsOf(int customerId) async {
+    final rows = await _db.query(
+      'contact_logs',
+      where: 'customer_id = ? AND deleted = 0',
+      whereArgs: [customerId],
+      orderBy: 'at DESC, id DESC',
+    );
+    return rows.map(ContactLog.fromMap).toList();
+  }
+
+  /// নতুন রেকর্ড; id ফেরত দেয় (পরে নোট যোগ করার জন্য)।
+  Future<int> addLog(
+    int customerId,
+    ContactKind kind, {
+    String note = '',
+    DateTime? at,
+  }) async {
+    final customerUid = (await _db.query(
+      'customers',
+      columns: ['uid'],
+      where: 'id = ?',
+      whereArgs: [customerId],
+    )).first['uid'];
+    final id = await _db.insert(
+      'contact_logs',
+      _touch({
+        'uid': newUid(),
+        'customer_id': customerId,
+        'customer_uid': customerUid,
+        'kind': kind.name,
+        'note': note.trim(),
+        'at': (at ?? DateTime.now()).millisecondsSinceEpoch,
+      }),
+    );
+    logsChanged.value++;
+    onLocalChange?.call();
+    return id;
+  }
+
+  Future<void> updateLog(
+    int id, {
+    required ContactKind kind,
+    required String note,
+    required DateTime at,
+  }) async {
+    await _db.update(
+      'contact_logs',
+      _touch({
+        'kind': kind.name,
+        'note': note.trim(),
+        'at': at.millisecondsSinceEpoch,
+      }),
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    logsChanged.value++;
+    onLocalChange?.call();
+  }
+
+  Future<void> deleteLog(int id) async {
+    await _db.update(
+      'contact_logs',
+      _touch({'deleted': 1}),
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+    logsChanged.value++;
+    onLocalChange?.call();
+  }
+
+  /// ইতিহাস বদলালে বাড়ে — খোলা পাতাগুলো আবার পড়ে নেয়।
+  final logsChanged = ValueNotifier(0);
 
   /// বাকি বা জমা যোগ করা। বাকির সাথে "কবে দেবে" ও রিমাইন্ডার সেট হয়।
   Future<void> addEntry({
@@ -297,6 +413,25 @@ class Store extends ChangeNotifier {
       await _setSchedule(customerId, dueDate, reminderAt);
     }
     await _afterChange(customerId);
+  }
+
+  Future<void> updateEntry(
+    Entry e, {
+    required double amount,
+    required DateTime date,
+    String note = '',
+  }) async {
+    await _db.update(
+      'entries',
+      _touch({
+        'amount': amount,
+        'date': date.millisecondsSinceEpoch,
+        'note': note.trim(),
+      }),
+      where: 'id = ?',
+      whereArgs: [e.id],
+    );
+    await _afterChange(e.customerId);
   }
 
   Future<void> deleteEntry(Entry e) async {
@@ -363,11 +498,16 @@ class Store extends ChangeNotifier {
 
   /// সার্ভারে পাঠানো বাকি রেকর্ডগুলো।
   Future<
-    ({List<Map<String, Object?>> customers, List<Map<String, Object?>> entries})
+    ({
+      List<Map<String, Object?>> customers,
+      List<Map<String, Object?>> entries,
+      List<Map<String, Object?>> logs,
+    })
   >
   dirtyRows() async => (
     customers: await _db.query('customers', where: 'dirty = 1'),
     entries: await _db.query('entries', where: 'dirty = 1'),
+    logs: await _db.query('contact_logs', where: 'dirty = 1'),
   );
 
   /// পাঠানো রেকর্ড "পরিষ্কার" চিহ্নিত করা। পাঠানোর মাঝে বদলে গেলে (updated_at ভিন্ন)
@@ -389,12 +529,17 @@ class Store extends ChangeNotifier {
   Future<void> markAllDirty() async {
     await _db.update('customers', {'dirty': 1});
     await _db.update('entries', {'dirty': 1});
+    await _db.update('contact_logs', {'dirty': 1});
   }
 
   /// সার্ভার থেকে আসা পরিবর্তন মেশানো। লোকালে নতুন কিছু থাকলে সেটাই থাকে।
   /// সার্ভারের ছবি (data URI) লোকাল ফাইলে সেভ হয়।
-  Future<void> applyRemote(List customers, List entries) async {
-    if (customers.isEmpty && entries.isEmpty) return;
+  Future<void> applyRemote(
+    List customers,
+    List entries, [
+    List logs = const [],
+  ]) async {
+    if (customers.isEmpty && entries.isEmpty && logs.isEmpty) return;
     final changed = <int>{};
     final removed = <int>{};
     // ছবি ফাইলে লিখতে হয় বলে ট্রানজ্যাকশনের আগেই করে রাখা।
@@ -407,7 +552,7 @@ class Store extends ChangeNotifier {
       for (final m in customers.cast<Map<String, dynamic>>()) {
         final local = (await txn.query(
           'customers',
-          columns: ['id', 'updated_at', 'photo'],
+          columns: ['id', 'updated_at', 'photo', 'extra_phones'],
           where: 'uid = ?',
           whereArgs: [m['uid']],
         )).firstOrNull;
@@ -415,6 +560,10 @@ class Store extends ChangeNotifier {
           'ledger': m['ledger'],
           'name': m['name'],
           'phone': m['phone'],
+          // পুরোনো সার্ভার এই ঘর পাঠায় না — তখন লোকালটাই থাকে
+          'extra_phones': m.containsKey('extra_phones')
+              ? (m['extra_phones'] ?? '')
+              : (local?['extra_phones'] ?? ''),
           'address': m['address'],
           'due_date': m['due_date'],
           'reminder_at': m['reminder_at'],
@@ -489,7 +638,43 @@ class Store extends ChangeNotifier {
         }
         changed.add(customer['id'] as int);
       }
+      for (final m in logs.cast<Map<String, dynamic>>()) {
+        final customer = (await txn.query(
+          'customers',
+          columns: ['id'],
+          where: 'uid = ?',
+          whereArgs: [m['customer_uid']],
+        )).firstOrNull;
+        if (customer == null) continue;
+        final local = (await txn.query(
+          'contact_logs',
+          columns: ['id', 'updated_at'],
+          where: 'uid = ?',
+          whereArgs: [m['uid']],
+        )).firstOrNull;
+        final values = {
+          'customer_id': customer['id'],
+          'customer_uid': m['customer_uid'],
+          'kind': m['kind'],
+          'note': m['note'] ?? '',
+          'at': m['at'],
+          'updated_at': m['updated_at'],
+          'deleted': m['deleted'] == true ? 1 : 0,
+          'dirty': 0,
+        };
+        if (local == null) {
+          await txn.insert('contact_logs', {...values, 'uid': m['uid']});
+        } else if ((m['updated_at'] as int) >= (local['updated_at'] as int)) {
+          await txn.update(
+            'contact_logs',
+            values,
+            where: 'id = ?',
+            whereArgs: [local['id']],
+          );
+        }
+      }
     });
+    if (logs.isNotEmpty) logsChanged.value++;
     // নতুন ছবি না আসা (বাতিল রো) ফাইল রাখা হবে; শুধু বদলে যাওয়া পুরনো ফাইল মোছা।
     for (final f in stale) {
       await deletePhoto(f);
@@ -505,6 +690,48 @@ class Store extends ChangeNotifier {
   }
 
   // ---------- পরিসংখ্যান ----------
+
+  /// সকালের সারাংশ আর দিনের শেষের হিসাব — দুটো রোজকার নোটিফিকেশন নতুন
+  /// করে বানায় (গতকাল ও আজকের লেনদেনসহ)।
+  Future<void> scheduleDaily() async {
+    final now = DateTime.now();
+    final days = [
+      DateTime(now.year, now.month, now.day - 1),
+      DateTime(now.year, now.month, now.day),
+    ];
+    final totals = {for (final d in days) d: await dayTotals(d)};
+    await Notifier.scheduleDailySummaries(all, days: totals);
+    await Notifier.scheduleRecaps(
+      days: totals,
+      pabo: totalOf(Ledger.pabo),
+      debo: totalOf(Ledger.debo),
+    );
+  }
+
+  /// একদিনের লেনদেন, দুই খাতা মিলিয়ে।
+  Future<DayTotals> dayTotals(DateTime day) async {
+    final from = DateTime(day.year, day.month, day.day);
+    final to = DateTime(day.year, day.month, day.day + 1);
+    final rows = await _db.rawQuery(
+      '''
+      SELECT c.ledger, e.type, SUM(e.amount) AS total, COUNT(*) AS n FROM entries e
+      JOIN customers c ON c.id = e.customer_id
+      WHERE e.deleted = 0 AND c.deleted = 0 AND e.date >= ? AND e.date < ?
+      GROUP BY c.ledger, e.type
+    ''',
+      [from.millisecondsSinceEpoch, to.millisecondsSinceEpoch],
+    );
+    return DayTotals({
+      for (final r in rows)
+        (
+          r['ledger'] == 'debo' ? Ledger.debo : Ledger.pabo,
+          r['type'] == 'joma' ? EntryType.joma : EntryType.baki,
+        ): (
+          (r['total'] as num).toDouble(),
+          r['n'] as int,
+        ),
+    });
+  }
 
   /// নির্দিষ্ট সময়ের মধ্যে মোট বাকি দেওয়া ও জমা পাওয়া।
   Future<({double baki, double joma, int count})> totalsBetween(

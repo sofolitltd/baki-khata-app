@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'ledger.dart';
+import 'models.dart';
 
 const _bnDigits = ['০', '১', '২', '৩', '৪', '৫', '৬', '৭', '৮', '৯'];
 
@@ -51,10 +52,26 @@ String fmtTime(int hour, int minute) {
   return bn('$period $h12:${minute.toString().padLeft(2, '0')}');
 }
 
+/// সব রিমাইন্ডার আর দৈনিক সারাংশের ডিফল্ট সময় — সকাল ১০টা।
+const defaultReminderTime = TimeOfDay(hour: 10, minute: 0);
+
 DateTime today() => DateUtils.dateOnly(DateTime.now());
 
 int daysUntil(DateTime date) =>
     DateUtils.dateOnly(date).difference(today()).inDays;
+
+/// "আজ", "গতকাল" বা "৫ দিন আগে"।
+String agoLabel(DateTime date) {
+  final d = -daysUntil(date);
+  if (d <= 0) return 'আজ';
+  if (d == 1) return 'গতকাল';
+  return '${bn(d)} দিন আগে';
+}
+
+/// কার্ডে নামের নিচে: "বাকি ১২ অক্টো (৫ দিন আগে)"।
+String lastBakiLabel(Customer c) =>
+    '${LedgerText.of(c.ledger).addTitle} ${fmtShortDate(c.lastBakiAt!)} '
+    '(${agoLabel(c.lastBakiAt!)})';
 
 enum DueStatus { none, overdue, today, soon, later }
 

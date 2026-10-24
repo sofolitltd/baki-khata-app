@@ -34,6 +34,10 @@ class SyncService extends ChangeNotifier {
   static const _kLastAt = 'sync_last_at';
   static const _kLastPushed = 'sync_last_pushed';
   static const _kLastPulled = 'sync_last_pulled';
+
+  /// সার্ভার যোগাযোগের ইতিহাস রাখতে পারে কি না (pull-এ `logs` এলে বোঝা যায়)।
+  /// পুরোনো সার্ভারে পাঠালে চুপচাপ হারিয়ে যেত, তাই তার আগে পাঠানো হয় না।
+  static const _kLogsOk = 'sync_logs_ok';
   static const _chunk = 200;
 
   late SharedPreferences _prefs;
@@ -242,6 +246,8 @@ class SyncService extends ChangeNotifier {
       final d = await store.dirtyRows();
       final cs = [for (final r in d.customers) await _customerJson(r)];
       final es = d.entries.map(_entryJson).toList();
+      final logsOk = _prefs.getBool(_kLogsOk) ?? false;
+      final ls = logsOk ? d.logs.map(_logJson).toList() : const [];
       for (var i = 0; i < cs.length; i += _chunk) {
         await _send(
           'POST',
@@ -256,16 +262,40 @@ class SyncService extends ChangeNotifier {
           body: {'customers': [], 'entries': es.skip(i).take(_chunk).toList()},
         );
       }
+      for (var i = 0; i < ls.length; i += _chunk) {
+        await _send(
+          'POST',
+          '/sync/push',
+          body: {
+            'customers': [],
+            'entries': [],
+            'logs': ls.skip(i).take(_chunk).toList(),
+          },
+        );
+      }
       await store.markPushed('customers', d.customers);
       await store.markPushed('entries', d.entries);
+      if (logsOk) await store.markPushed('contact_logs', d.logs);
 
       final res = await _send('GET', '/sync/pull?since=$_cursor');
-      await store.applyRemote(res['customers'] as List, res['entries'] as List);
+      final logs = (res['logs'] as List?) ?? const [];
+      await store.applyRemote(
+        res['customers'] as List,
+        res['entries'] as List,
+        logs,
+      );
       await _prefs.setInt(_kCursor, res['cursor'] as int);
+      if (!logsOk && res.containsKey('logs')) {
+        // সার্ভার নতুন — জমে থাকা ইতিহাস পরের সিঙ্কেই যাবে
+        await _prefs.setBool(_kLogsOk, true);
+        _again = true;
+      }
       lastSyncAt = DateTime.now();
-      lastPushed = d.customers.length + d.entries.length;
+      lastPushed = d.customers.length + d.entries.length + ls.length;
       lastPulled =
-          (res['customers'] as List).length + (res['entries'] as List).length;
+          (res['customers'] as List).length +
+          (res['entries'] as List).length +
+          logs.length;
       await _prefs.setInt(_kLastAt, lastSyncAt!.millisecondsSinceEpoch);
       await _prefs.setInt(_kLastPushed, lastPushed);
       await _prefs.setInt(_kLastPulled, lastPulled);
@@ -297,6 +327,7 @@ class SyncService extends ChangeNotifier {
     'ledger': r['ledger'],
     'name': r['name'],
     'phone': r['phone'],
+    'extra_phones': r['extra_phones'],
     'address': r['address'],
     'photo': await photoToData(r['photo'] as String? ?? ''),
     'due_date': r['due_date'],
@@ -313,6 +344,16 @@ class SyncService extends ChangeNotifier {
     'amount': r['amount'],
     'date': r['date'],
     'note': r['note'],
+    'updated_at': r['updated_at'],
+    'deleted': r['deleted'] == 1,
+  };
+
+  static Map<String, Object?> _logJson(Map<String, Object?> r) => {
+    'uid': r['uid'],
+    'customer_uid': r['customer_uid'],
+    'kind': r['kind'],
+    'note': r['note'],
+    'at': r['at'],
     'updated_at': r['updated_at'],
     'deleted': r['deleted'] == 1,
   };

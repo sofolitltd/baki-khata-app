@@ -6,7 +6,9 @@ import '../store.dart';
 import '../theme.dart';
 import '../utils.dart';
 import '../voice.dart';
+import 'contact_log.dart';
 import 'customer_screen.dart';
+import 'customers_screen.dart';
 import 'entry_sheet.dart';
 import 'shell.dart';
 
@@ -483,9 +485,21 @@ class _CustomerList extends StatelessWidget {
       overflow: TextOverflow.ellipsis,
       style: const TextStyle(fontWeight: FontWeight.w600),
     ),
-    subtitle: Text(
-      dueLabel(c.dueDate!, c.ledger),
-      style: TextStyle(color: dueColor(context, c.dueDate), fontSize: 13),
+    subtitle: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (c.lastBakiAt != null)
+          Text(
+            lastBakiLabel(c),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 13),
+          ),
+        Text(
+          dueLabel(c.dueDate!, c.ledger),
+          style: TextStyle(color: dueColor(context, c.dueDate), fontSize: 13),
+        ),
+      ],
     ),
     trailing: Row(
       mainAxisSize: MainAxisSize.min,
@@ -500,7 +514,7 @@ class _CustomerList extends StatelessWidget {
         ),
         IconButton(
           tooltip: 'কল',
-          onPressed: c.phone.isEmpty ? null : () => callPhone(context, c.phone),
+          onPressed: c.phone.isEmpty ? null : () => callAndLog(context, c),
           icon: const Icon(Icons.call_rounded),
           color: Theme.of(context).colorScheme.primary,
         ),
@@ -560,14 +574,47 @@ class _RecentTile extends StatelessWidget {
 }
 
 /// নাম বা মোবাইল লিখলে মিলে যাওয়া কাস্টমারের সাজেশন তালিকা; ট্যাপ করলে খাতা খোলে।
-class _CustomerSearch extends StatelessWidget {
+class _CustomerSearch extends StatefulWidget {
   const _CustomerSearch({required this.store});
   final Store store;
 
   @override
+  State<_CustomerSearch> createState() => _CustomerSearchState();
+}
+
+class _CustomerSearchState extends State<_CustomerSearch> {
+  final _controller = SearchController();
+
+  Store get store => widget.store;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  /// বলা কথা খোঁজার ঘরে বসায়; বার থেকে বললে খোঁজার পাতাও খুলে দেয়।
+  void _voice(String t) {
+    if (t.isEmpty) return;
+    if (!_controller.isOpen) _controller.openView();
+    _controller.text = t;
+    _controller.selection = TextSelection.collapsed(offset: t.length);
+  }
+
+  @override
   Widget build(BuildContext context) => SearchAnchor.bar(
+    searchController: _controller,
     barHintText: 'নাম বা মোবাইল দিয়ে খুঁজুন',
     barElevation: const WidgetStatePropertyAll(0),
+    barTrailing: [MicButton(onText: _voice)],
+    viewTrailing: [
+      IconButton(
+        tooltip: 'মুছুন',
+        icon: const Icon(Icons.close_rounded),
+        onPressed: _controller.clear,
+      ),
+      MicButton(onText: _voice),
+    ],
     suggestionsBuilder: (context, controller) {
       final q = toEnDigits(controller.text.trim().toLowerCase());
       final list =
@@ -576,7 +623,7 @@ class _CustomerSearch extends StatelessWidget {
                 (c) =>
                     q.isEmpty ||
                     c.name.toLowerCase().contains(q) ||
-                    c.phone.contains(q),
+                    c.phones.any((p) => p.contains(q)),
               )
               .toList()
             ..sort((a, b) {
@@ -584,25 +631,20 @@ class _CustomerSearch extends StatelessWidget {
               return a.name.compareTo(b.name);
             });
       return [
+        const SizedBox(height: 12),
         for (final c in list)
-          ListTile(
-            leading: const Icon(Icons.person_rounded),
-            title: Text(c.name),
-            subtitle: Text(c.phone.isEmpty ? '—' : c.phone),
-            trailing: c.hasDue
-                ? Text(
-                    taka(c.balance),
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w700,
-                      color: bakiColor,
-                    ),
-                  )
-                : null,
-            onTap: () {
-              controller.closeView('');
-              openCustomer(context, c.id);
-            },
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+            child: CustomerCard(
+              customer: c,
+              onTap: () {
+                controller.closeView('');
+                openCustomer(context, c.id);
+              },
+            ),
           ),
+        // নিচে কিবোর্ড/নেভিগেশন বারের পেছনে যেন শেষ কার্ড না ঢাকে
+        SizedBox(height: 12 + MediaQuery.paddingOf(context).bottom),
       ];
     },
   );

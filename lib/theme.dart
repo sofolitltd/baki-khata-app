@@ -75,6 +75,18 @@ ThemeData buildTheme(Brightness brightness, [Ledger ledger = Ledger.pabo]) {
         ),
       ),
     ),
+    // বাতিল/মুছুন — পাশের ভরাট বাটনের সমান মাপ ও আকৃতি, শুধু আউটলাইন
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: OutlinedButton.styleFrom(
+        minimumSize: const Size.fromHeight(52),
+        shape: RoundedRectangleBorder(borderRadius: radius),
+        textStyle: const TextStyle(
+          fontFamily: appFont,
+          fontSize: 16,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    ),
     chipTheme: ChipThemeData(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       side: BorderSide(color: cs.outlineVariant),

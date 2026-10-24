@@ -8,6 +8,8 @@ import '../store.dart';
 import '../theme.dart';
 import '../utils.dart';
 import '../voice.dart';
+import 'customer_picker.dart';
+import 'due_reminder.dart';
 
 /// বাকি / জমা লেখার শিট।
 /// [customer] না দিলে নতুন (বা আগের) কাস্টমারের নাম লিখে সরাসরি বাকি লেখা যায় —
@@ -22,19 +24,6 @@ Future<bool?> showEntrySheet(
   useSafeArea: true,
   builder: (_) => _EntrySheet(customer: customer, type: type),
 );
-
-class _DueOption {
-  final String label;
-  final int? days; // null = নিজে তারিখ বাছাই
-  const _DueOption(this.label, this.days);
-}
-
-const _dueOptions = [
-  _DueOption('৩ দিন', 3),
-  _DueOption('৭ দিন', 7),
-  _DueOption('১৫ দিন', 15),
-  _DueOption('১ মাস', 30),
-];
 
 class _EntrySheet extends StatefulWidget {
   const _EntrySheet({this.customer, required this.type});
@@ -56,6 +45,7 @@ class _EntrySheetState extends State<_EntrySheet> {
   TextEditingController? _acController;
   DateTime _date = DateTime.now();
   DateTime? _due;
+  TimeOfDay _remindTime = defaultReminderTime;
   bool _remind = true;
   bool _saving = false;
 
@@ -70,6 +60,8 @@ class _EntrySheetState extends State<_EntrySheet> {
     _due = existingDue != null && daysUntil(existingDue) >= 0
         ? existingDue
         : today().add(const Duration(days: 7));
+    final r = widget.customer?.reminderAt;
+    if (r != null) _remindTime = TimeOfDay.fromDateTime(r);
   }
 
   @override
@@ -78,17 +70,6 @@ class _EntrySheetState extends State<_EntrySheet> {
       c.dispose();
     }
     super.dispose();
-  }
-
-  Future<void> _pickDue() async {
-    final d = await showDatePicker(
-      context: context,
-      initialDate: _due ?? today(),
-      firstDate: today(),
-      lastDate: today().add(const Duration(days: 730)),
-      helpText: _t.whenAsk,
-    );
-    if (d != null) setState(() => _due = d);
   }
 
   Future<void> _pickDate() async {
@@ -127,14 +108,11 @@ class _EntrySheetState extends State<_EntrySheet> {
       setState(() => _saving = false);
       return toast(context, 'তালিকা থেকে নাম বাছাই করুন');
     }
-    id ??= await _store.addCustomer(name: _name.text, phone: _phone.text);
+    id ??= await _store.addCustomer(name: _name.text, phones: [_phone.text]);
 
-    DateTime? reminderAt;
+    DateTime? remindAt;
     if (_isBaki && _due != null && _remind) {
-      reminderAt = DateTime(_due!.year, _due!.month, _due!.day, 10);
-      if (reminderAt.isBefore(DateTime.now())) {
-        reminderAt = DateTime.now().add(const Duration(hours: 1));
-      }
+      remindAt = reminderAt(_due!, _remindTime);
       await Notifier.requestPermission();
     }
 
@@ -145,7 +123,7 @@ class _EntrySheetState extends State<_EntrySheet> {
       date: _date,
       note: _note.text,
       dueDate: _due,
-      reminderAt: reminderAt,
+      reminderAt: remindAt,
       updateSchedule: _isBaki,
     );
     if (mounted) Navigator.pop(context, true);
@@ -302,60 +280,15 @@ class _EntrySheetState extends State<_EntrySheet> {
 
             if (_isBaki) ...[
               const SizedBox(height: 18),
-              Text(
-                _t.whenAsk,
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  color: cs.onSurfaceVariant,
-                ),
+              DueReminderFields(
+                label: _t.whenAsk,
+                due: _due,
+                remind: _remind,
+                time: _remindTime,
+                onDue: (d) => setState(() => _due = d),
+                onRemind: (v) => setState(() => _remind = v),
+                onTime: (t) => setState(() => _remindTime = t),
               ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final o in _dueOptions)
-                    ChoiceChip(
-                      label: Text(o.label),
-                      selected: _due != null && daysUntil(_due!) == o.days,
-                      onSelected: (_) => setState(
-                        () => _due = today().add(Duration(days: o.days!)),
-                      ),
-                    ),
-                  ChoiceChip(
-                    avatar: const Icon(Icons.calendar_month_rounded, size: 18),
-                    label: Text(
-                      _due != null &&
-                              !_dueOptions.any(
-                                (o) => daysUntil(_due!) == o.days,
-                              )
-                          ? fmtShortDate(_due!)
-                          : 'তারিখ',
-                    ),
-                    selected:
-                        _due != null &&
-                        !_dueOptions.any((o) => daysUntil(_due!) == o.days),
-                    onSelected: (_) => _pickDue(),
-                  ),
-                  ChoiceChip(
-                    label: const Text('ঠিক নেই'),
-                    selected: _due == null,
-                    onSelected: (_) => setState(() => _due = null),
-                  ),
-                ],
-              ),
-              if (_due != null)
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  value: _remind,
-                  onChanged: (v) => setState(() => _remind = v),
-                  secondary: Icon(
-                    Icons.notifications_active_outlined,
-                    color: cs.primary,
-                  ),
-                  title: const Text('রিমাইন্ডার দিন'),
-                  subtitle: Text('${fmtDate(_due!)}, সকাল ১০টায়'),
-                ),
             ],
 
             const SizedBox(height: 4),
@@ -383,20 +316,29 @@ class _EntrySheetState extends State<_EntrySheet> {
     );
   }
 
+  void _select(Customer c) => setState(() {
+    _picked = c;
+    _name.text = c.name;
+    final d = c.dueDate;
+    if (d != null && daysUntil(d) >= 0) _due = d;
+    final r = c.reminderAt;
+    if (r != null) _remindTime = TimeOfDay.fromDateTime(r);
+  });
+
   Widget _nameField() => Autocomplete<Customer>(
     displayStringForOption: (c) => c.name,
     optionsBuilder: (v) {
       final q = v.text.trim().toLowerCase();
       if (q.isEmpty) return const Iterable<Customer>.empty();
       return _store.customers
-          .where((c) => c.name.toLowerCase().contains(q) || c.phone.contains(q))
+          .where(
+            (c) =>
+                c.name.toLowerCase().contains(q) ||
+                c.phones.any((p) => p.contains(q)),
+          )
           .take(5);
     },
-    onSelected: (c) => setState(() {
-      _picked = c;
-      final d = c.dueDate;
-      if (d != null && daysUntil(d) >= 0) _due = d;
-    }),
+    onSelected: _select,
     fieldViewBuilder: (context, controller, focus, onSubmit) {
       if (!identical(_acController, controller)) {
         _acController = controller;
@@ -410,9 +352,19 @@ class _EntrySheetState extends State<_EntrySheet> {
         decoration: InputDecoration(
           hintText: _isBaki ? _t.partyHint : _t.reduceWho,
           prefixIcon: const Icon(Icons.person_outline_rounded),
-          suffixIcon: MicButton(
-            onFinal: (t) => controller.text = t,
-            onText: (_) {},
+          suffixIcon: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                tooltip: 'তালিকা থেকে বাছাই',
+                icon: const Icon(Icons.people_alt_outlined),
+                onPressed: () async {
+                  final c = await pickCustomer(context);
+                  if (c != null) _select(c);
+                },
+              ),
+              MicButton(onFinal: (t) => controller.text = t, onText: (_) {}),
+            ],
           ),
         ),
       );

@@ -3,11 +3,13 @@ import 'package:image_picker/image_picker.dart';
 
 import '../auth.dart';
 import '../ledger.dart';
+import '../notifications.dart';
 import '../photo.dart';
 import '../pin_field.dart';
 import '../store.dart';
 import '../sync.dart';
 import '../utils.dart';
+import 'due_reminder.dart';
 
 /// প্রোফাইল: নিজের তথ্য, দোকানের তথ্য, খাতার সারসংক্ষেপ, সিঙ্ক, PIN বদল ও লগআউট।
 class ProfileScreen extends StatelessWidget {
@@ -60,6 +62,61 @@ class ProfileScreen extends StatelessWidget {
                   ),
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: () => showSyncSheet(context),
+                ),
+              ]),
+              const SizedBox(height: 16),
+              _section(context, 'নোটিফিকেশন', [
+                ValueListenableBuilder(
+                  valueListenable: Notifier.summaryTime,
+                  builder: (context, t, _) => ListTile(
+                    leading: const Icon(Icons.wb_sunny_rounded),
+                    title: const Text('সকালের সারাংশের সময়'),
+                    subtitle: Text(fmtTime(t.hour, t.minute)),
+                    trailing: const Text('বদলান'),
+                    onTap: () async {
+                      final picked = await pickReminderTime(context, t);
+                      if (picked == null) return;
+                      await Notifier.requestPermission();
+                      await Notifier.setSummaryTime(picked);
+                      await Store.instance.scheduleDaily();
+                    },
+                  ),
+                ),
+                ValueListenableBuilder(
+                  valueListenable: Notifier.recapOn,
+                  builder: (context, on, _) => SwitchListTile(
+                    secondary: const Icon(Icons.nightlight_round),
+                    title: const Text('দিনের শেষের হিসাব'),
+                    subtitle: const Text(
+                      'আজ কত বাকি দিলেন, কত আদায় হলো — না লিখলে মনে করিয়ে দেবে',
+                    ),
+                    value: on,
+                    onChanged: (v) async {
+                      if (v) await Notifier.requestPermission();
+                      await Notifier.setRecap(on: v);
+                      await Store.instance.scheduleDaily();
+                    },
+                  ),
+                ),
+                ValueListenableBuilder(
+                  valueListenable: Notifier.recapOn,
+                  builder: (context, on, _) => !on
+                      ? const SizedBox.shrink()
+                      : ValueListenableBuilder(
+                          valueListenable: Notifier.recapTime,
+                          builder: (context, t, _) => ListTile(
+                            leading: const Icon(Icons.schedule_rounded),
+                            title: const Text('দিনের শেষের হিসাবের সময়'),
+                            subtitle: Text(fmtTime(t.hour, t.minute)),
+                            trailing: const Text('বদলান'),
+                            onTap: () async {
+                              final picked = await pickReminderTime(context, t);
+                              if (picked == null) return;
+                              await Notifier.setRecap(time: picked);
+                              await Store.instance.scheduleDaily();
+                            },
+                          ),
+                        ),
                 ),
               ]),
               const SizedBox(height: 20),
@@ -293,8 +350,8 @@ class _EditProfileSheetState extends State<_EditProfileSheet> {
         ),
       ),
     );
-    if (source == null) return;
-    final path = await pickCompressedPhoto(source);
+    if (source == null || !mounted) return;
+    final path = await pickCompressedPhoto(context, source);
     if (path != null && mounted) setState(() => _photo = path);
   }
 

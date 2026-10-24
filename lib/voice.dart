@@ -144,7 +144,29 @@ String takaWords(num amount) {
   return paisa > 0 ? '$t ${banglaWords(paisa)} পয়সা' : t;
 }
 
-/// ফোনের নিজস্ব TTS দিয়ে বাংলায় পড়ে শোনায়। ইন্টারনেট লাগে না (বাংলা ভয়েস ফোনে থাকলে)।
+/// লেখাকে বাংলা আর ইংরেজি অংশে ভাগ করে — প্রতিটা অংশ নিজের ভাষার ভয়েসে
+/// পড়া হয়। সংখ্যা, দাঁড়ি-কমা ইত্যাদি আগের অংশের সাথেই থাকে।
+List<({bool english, String text})> splitByScript(String s) {
+  final parts = <({bool english, String text})>[];
+  final buf = StringBuffer();
+  bool? lang; // এখনকার অংশের ভাষা; null = এখনো কোনো অক্ষর আসেনি
+  for (final r in s.runes) {
+    final english =
+        (r >= 0x41 && r <= 0x5A) || (r >= 0x61 && r <= 0x7A); // A-Z a-z
+    final bangla = r >= 0x0980 && r <= 0x09FF;
+    if ((english || bangla) && lang != null && lang != english) {
+      parts.add((english: lang, text: buf.toString()));
+      buf.clear();
+    }
+    if (english || bangla) lang = english;
+    buf.writeCharCode(r);
+  }
+  if (buf.isNotEmpty) parts.add((english: lang ?? false, text: buf.toString()));
+  return parts;
+}
+
+/// ফোনের নিজস্ব TTS দিয়ে পড়ে শোনায় — বাংলা অংশ বাংলা ভয়েসে, ইংরেজি অংশ
+/// (যেমন ইংরেজিতে লেখা নাম) ইংরেজি ভয়েসে। ইন্টারনেট লাগে না (ভয়েস ফোনে থাকলে)।
 class Voice {
   Voice._();
   static final Voice instance = Voice._();
@@ -152,12 +174,37 @@ class Voice {
   final FlutterTts _tts = FlutterTts();
   bool _ready = false;
 
+  static const _bnLanguages = ['bn-BD', 'bn-IN', 'bn'];
+  // বাংলাদেশি নাম ভারতীয় ইংরেজি উচ্চারণে বেশি স্বাভাবিক শোনায়
+  static const _enLanguages = ['en-IN', 'en-US', 'en-GB'];
+  static const _googleEngine = 'com.google.android.tts';
+
+  String? _bnLang, _enLang;
+  Map<String, String>? _bnVoice, _enVoice;
+
+  /// এখন কোন ভাষায় সেট করা আছে (true = ইংরেজি)।
+  bool? _current;
+
+  /// stop() ডাকলে বাড়ে — চলতি কয়েক অংশের পড়া মাঝপথে থেমে যায়।
+  int _gen = 0;
+
   Future<bool> _init() async {
     if (_ready) return true;
     try {
-      final ok = await _tts.isLanguageAvailable('bn-BD');
-      if (ok == false) return false;
-      await _tts.setLanguage('bn-BD');
+      _bnLang = await _firstAvailable(_bnLanguages);
+      // ফোনের ডিফল্ট ইঞ্জিনে (যেমন Samsung) বাংলা না থাকলে Google-এরটায় যাওয়া
+      if (_bnLang == null && defaultTargetPlatform == TargetPlatform.android) {
+        final engines = await _tts.getEngines;
+        if (engines is List && engines.contains(_googleEngine)) {
+          await _tts.setEngine(_googleEngine);
+          _bnLang = await _firstAvailable(_bnLanguages);
+        }
+      }
+      if (_bnLang == null) return false;
+      _enLang = await _firstAvailable(_enLanguages);
+      _bnVoice = await _bestVoice('bn', _bnLang!);
+      if (_enLang != null) _enVoice = await _bestVoice('en', _enLang!);
+      await _use(english: false);
       await _tts.setSpeechRate(0.45);
       await _tts.awaitSpeakCompletion(true);
       _ready = true;
@@ -167,10 +214,71 @@ class Voice {
     return true;
   }
 
+  Future<String?> _firstAvailable(List<String> languages) async {
+    for (final l in languages) {
+      if (await _tts.isLanguageAvailable(l) == true) return l;
+    }
+    return null;
+  }
+
+  /// ইঞ্জিনের ডিফল্ট ভয়েস অনেক সময় ঠিক ভাষার হয় না — নিজে বাছাই,
+  /// ঠিক লোকেলের আর অফলাইনেরটা আগে।
+  Future<Map<String, String>?> _bestVoice(String prefix, String lang) async {
+    try {
+      final voices = await _tts.getVoices;
+      if (voices is! List) return null;
+      String locale(Map v) => '${v['locale']}'.replaceAll('_', '-');
+      final matching = [
+        for (final v in voices)
+          if (v is Map && locale(v).toLowerCase().startsWith(prefix)) v,
+      ];
+      if (matching.isEmpty) return null;
+      int score(Map v) =>
+          (locale(v) == lang ? 2 : 0) + (v['network_required'] == '1' ? 0 : 1);
+      matching.sort((a, b) => score(b).compareTo(score(a)));
+      final v = matching.first;
+      return {'name': '${v['name']}', 'locale': '${v['locale']}'};
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// ভাষা বদলায় (দরকার হলেই)। ইংরেজি ভয়েস না থাকলে বাংলাতেই পড়ে।
+  Future<void> _use({required bool english}) async {
+    if (english && _enLang == null) english = false;
+    if (_current == english) return;
+    await _tts.setLanguage(english ? _enLang! : _bnLang!);
+    final voice = english ? _enVoice : _bnVoice;
+    if (voice != null) await _tts.setVoice(voice);
+    _current = english;
+  }
+
   Future<void> stop() async {
+    _gen++;
     try {
       await _tts.stop();
     } catch (_) {}
+  }
+
+  static const noVoiceMsg =
+      'এই ফোনে বাংলা ভয়েস নেই। ফোনের সেটিংসে Google Text-to-speech-এ বাংলা ভয়েস ডাউনলোড করুন';
+
+  /// পড়া শেষ হওয়া (বা থামানো) পর্যন্ত অপেক্ষা করে। বাংলা ভয়েস না থাকলে
+  /// বা ত্রুটি হলে false।
+  Future<bool> speak(String text) async {
+    if (kIsWeb || !await _init()) return false;
+    final gen = _gen;
+    try {
+      for (final part in splitByScript(text)) {
+        if (gen != _gen) break;
+        if (part.text.trim().isEmpty) continue;
+        await _use(english: part.english);
+        await _tts.speak(part.text);
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// পড়ে শোনায়। বাংলা ভয়েস না থাকলে বা ত্রুটি হলে বার্তা দেখায়।
@@ -178,18 +286,11 @@ class Voice {
     if (kIsWeb) return;
     await stop();
     if (!await _init()) {
-      if (context.mounted) {
-        toast(
-          context,
-          'এই ফোনে বাংলা ভয়েস নেই। ফোনের সেটিংসে Google Text-to-speech-এ বাংলা ভয়েস ডাউনলোড করুন',
-        );
-      }
+      if (context.mounted) toast(context, noVoiceMsg);
       return;
     }
-    try {
-      await _tts.speak(text);
-    } catch (_) {
-      if (context.mounted) toast(context, 'ভয়েস চালানো যায়নি');
+    if (!await speak(text) && context.mounted) {
+      toast(context, 'ভয়েস চালানো যায়নি');
     }
   }
 }

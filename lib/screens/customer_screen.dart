@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../ledger.dart';
@@ -9,8 +10,11 @@ import '../store.dart';
 import '../theme.dart';
 import '../utils.dart';
 import '../voice.dart';
+import 'contact_log.dart';
+import 'due_reminder.dart';
 import 'entry_sheet.dart';
 import 'shell.dart';
+import 'statement_share.dart';
 
 /// নতুন কাস্টমার যোগ বা এডিট। নতুন হলে id ফেরত দেয়।
 Future<int?> showCustomerForm(BuildContext context, {Customer? customer}) =>
@@ -56,6 +60,54 @@ class _CustomerScreenState extends State<CustomerScreen> {
             ? LedgerText.of(c.ledger).allSettled
             : 'সেভ হয়েছে',
       );
+    }
+  }
+
+  /// এন্ট্রিতে চাপলে: এডিট বা মুছুন।
+  Future<void> _entryActions(Entry e) async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      useSafeArea: true,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.edit_outlined),
+              title: const Text('এডিট করুন'),
+              onTap: () => Navigator.pop(ctx, 'edit'),
+            ),
+            ListTile(
+              leading: Icon(
+                Icons.delete_outline_rounded,
+                color: Theme.of(ctx).colorScheme.error,
+              ),
+              title: Text(
+                'মুছুন',
+                style: TextStyle(color: Theme.of(ctx).colorScheme.error),
+              ),
+              onTap: () => Navigator.pop(ctx, 'delete'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (action == 'edit') {
+      final saved = await showModalBottomSheet<bool>(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        builder: (_) => _EditEntrySheet(
+          entry: e,
+          customer: _store.byId(e.customerId),
+          title: _entryWord(e),
+        ),
+      );
+      if (saved == true) await _load();
+    } else if (action == 'delete') {
+      await _deleteEntry(e);
     }
   }
 
@@ -111,17 +163,9 @@ class _CustomerScreenState extends State<CustomerScreen> {
       ) ??
       false;
 
-  void _call(Customer c) => callPhone(context, c.phone);
+  void _call(Customer c) => callAndLog(context, c);
 
-  void _sms(Customer c) {
-    final due = c.dueDate != null
-        ? ' ${fmtDate(c.dueDate!)} তারিখের মধ্যে'
-        : '';
-    final body =
-        'আসসালামু আলাইকুম ${c.name}, দোকানে আপনার বাকি '
-        '${taka(c.balance)}। অনুগ্রহ করে$due পরিশোধ করবেন। ধন্যবাদ।';
-    sendSms(context, c.phone, body);
-  }
+  void _sms(Customer c) => smsAndLog(context, c);
 
   Future<void> _reminder(Customer c) async {
     await showModalBottomSheet(
@@ -157,6 +201,11 @@ class _CustomerScreenState extends State<CustomerScreen> {
               ],
             ),
             actions: [
+              IconButton(
+                tooltip: 'হিসাবের ছবি শেয়ার',
+                icon: const Icon(Icons.share_rounded),
+                onPressed: () => shareStatement(context, c),
+              ),
               IconButton(
                 tooltip: 'শুনুন',
                 icon: const Icon(Icons.volume_up_rounded),
@@ -225,6 +274,8 @@ class _CustomerScreenState extends State<CustomerScreen> {
                   label: const Text('মোবাইল নম্বর যোগ করুন'),
                 ),
               ],
+              const SizedBox(height: 12),
+              ContactHistoryTile(customer: c),
               const SizedBox(height: 20),
               Text(
                 'লেনদেনের হিসাব',
@@ -259,7 +310,7 @@ class _CustomerScreenState extends State<CustomerScreen> {
                         _EntryTile(
                           entry: _entries![i],
                           text: LedgerText.of(c.ledger),
-                          onLongPress: () => _deleteEntry(_entries![i]),
+                          onTap: () => _entryActions(_entries![i]),
                         ),
                       ],
                     ],
@@ -269,7 +320,7 @@ class _CustomerScreenState extends State<CustomerScreen> {
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
                   child: Text(
-                    'মুছতে চাইলে এন্ট্রিতে চেপে ধরুন',
+                    'এডিট বা মুছতে এন্ট্রিতে চাপুন',
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
                   ),
@@ -362,7 +413,7 @@ class _BalanceCard extends StatelessWidget {
             if (c.phone.isNotEmpty || c.address.isNotEmpty) ...[
               const SizedBox(height: 10),
               Text(
-                [c.phone, c.address].where((s) => s.isNotEmpty).join(' • '),
+                [...c.phones, c.address].where((s) => s.isNotEmpty).join(' • '),
                 style: TextStyle(color: cs.onSurfaceVariant),
               ),
             ],
@@ -474,11 +525,11 @@ class _EntryTile extends StatelessWidget {
   const _EntryTile({
     required this.entry,
     required this.text,
-    required this.onLongPress,
+    required this.onTap,
   });
   final Entry entry;
   final LedgerText text;
-  final VoidCallback onLongPress;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -486,7 +537,8 @@ class _EntryTile extends StatelessWidget {
     final isBaki = e.type == EntryType.baki;
     final color = isBaki ? bakiColor : jomaColor;
     return ListTile(
-      onLongPress: onLongPress,
+      onTap: onTap,
+      onLongPress: onTap,
       leading: CircleAvatar(
         backgroundColor: color.withValues(alpha: .12),
         child: Icon(
@@ -513,6 +565,188 @@ class _EntryTile extends StatelessWidget {
   }
 }
 
+/// আগের এন্ট্রির টাকা, তারিখ ও নোট বদলানো।
+class _EditEntrySheet extends StatefulWidget {
+  const _EditEntrySheet({
+    required this.entry,
+    required this.customer,
+    required this.title,
+  });
+  final Entry entry;
+  final Customer? customer;
+  final String title;
+
+  @override
+  State<_EditEntrySheet> createState() => _EditEntrySheetState();
+}
+
+class _EditEntrySheetState extends State<_EditEntrySheet> {
+  late final _amount = TextEditingController(
+    text: widget.entry.amount == widget.entry.amount.roundToDouble()
+        ? widget.entry.amount.toStringAsFixed(0)
+        : widget.entry.amount.toString(),
+  );
+  late final _note = TextEditingController(text: widget.entry.note);
+  late DateTime _date = widget.entry.date;
+
+  /// বাকির এন্ট্রিতে কবে দেবে আর রিমাইন্ডারও বদলানো যায়।
+  bool get _withDue =>
+      widget.entry.type == EntryType.baki && widget.customer != null;
+  late DateTime? _due = _initialDue();
+  // আগে তারিখ থাকলে রিমাইন্ডার যেমন ছিল তেমন; নতুন তারিখে ডিফল্ট চালু
+  late bool _remind =
+      _due == null ||
+      (widget.customer?.reminderAt?.isAfter(DateTime.now()) ?? false);
+  late TimeOfDay _remindTime = widget.customer?.reminderAt != null
+      ? TimeOfDay.fromDateTime(widget.customer!.reminderAt!)
+      : defaultReminderTime;
+
+  DateTime? _initialDue() {
+    final d = widget.customer?.dueDate;
+    return d != null && daysUntil(d) >= 0 ? d : null;
+  }
+
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _amount.dispose();
+    _note.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickDate() async {
+    final d = await showDatePicker(
+      context: context,
+      initialDate: _date,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now(),
+      helpText: 'লেনদেনের তারিখ',
+    );
+    if (d == null) return;
+    // দিন বদলালেও আগের সময়টা থাকে, যাতে একই দিনের ক্রম না বদলায়
+    setState(
+      () => _date = DateTime(
+        d.year,
+        d.month,
+        d.day,
+        _date.hour,
+        _date.minute,
+        _date.second,
+      ),
+    );
+  }
+
+  Future<void> _save() async {
+    final amount = parseAmount(_amount.text);
+    if (amount == null || amount <= 0) {
+      return toast(context, 'সঠিক টাকার পরিমাণ লিখুন');
+    }
+    setState(() => _saving = true);
+    if (_withDue) {
+      final remindAt = _due != null && _remind
+          ? reminderAt(_due!, _remindTime)
+          : null;
+      if (remindAt != null) await Notifier.requestPermission();
+      await Store.instance.setSchedule(widget.customer!.id, _due, remindAt);
+    }
+    await Store.instance.updateEntry(
+      widget.entry,
+      amount: amount,
+      date: _date,
+      note: _note.text,
+    );
+    if (mounted) Navigator.pop(context, true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = widget.entry.type == EntryType.baki ? bakiColor : jomaColor;
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              '${widget.title} এডিট',
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _amount,
+              autofocus: true,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'[0-9০-৯.]')),
+              ],
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.w700,
+                color: color,
+              ),
+              decoration: InputDecoration(
+                hintText: 'টাকার পরিমাণ',
+                prefixIcon: Padding(
+                  padding: const EdgeInsets.only(left: 16, right: 8),
+                  child: Text(
+                    '৳',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w700,
+                      color: color,
+                    ),
+                  ),
+                ),
+                prefixIconConstraints: const BoxConstraints(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _note,
+              decoration: const InputDecoration(
+                hintText: 'নোট (ঐচ্ছিক)',
+                prefixIcon: Icon(Icons.notes_rounded),
+              ),
+            ),
+            const SizedBox(height: 4),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.event_outlined),
+              title: Text(fmtDate(_date)),
+              trailing: const Text('বদলান'),
+              onTap: _pickDate,
+            ),
+            if (_withDue) ...[
+              const SizedBox(height: 8),
+              DueReminderFields(
+                label: LedgerText.of(widget.customer!.ledger).whenAsk,
+                due: _due,
+                remind: _remind,
+                time: _remindTime,
+                onDue: (d) => setState(() => _due = d),
+                onRemind: (v) => setState(() => _remind = v),
+                onTime: (t) => setState(() => _remindTime = t),
+              ),
+            ],
+            const SizedBox(height: 8),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(backgroundColor: color),
+              onPressed: _saving ? null : _save,
+              icon: const Icon(Icons.check_rounded),
+              label: const Text('সেভ করুন'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _ReminderSheet extends StatefulWidget {
   const _ReminderSheet({required this.customer});
   final Customer customer;
@@ -532,9 +766,7 @@ class _ReminderSheetState extends State<_ReminderSheet> {
     final r = c.reminderAt;
     _due = c.dueDate ?? today().add(const Duration(days: 1));
     if (daysUntil(_due) < 0) _due = today().add(const Duration(days: 1));
-    _time = r != null
-        ? TimeOfDay.fromDateTime(r)
-        : const TimeOfDay(hour: 10, minute: 0);
+    _time = r != null ? TimeOfDay.fromDateTime(r) : defaultReminderTime;
   }
 
   DateTime get _at =>
@@ -613,10 +845,7 @@ class _ReminderSheetState extends State<_ReminderSheet> {
             subtitle: const Text('কখন মনে করাবে'),
             trailing: const Text('বদলান'),
             onTap: () async {
-              final t = await showTimePicker(
-                context: context,
-                initialTime: _time,
-              );
+              final t = await pickReminderTime(context, _time);
               if (t != null) setState(() => _time = t);
             },
           ),
@@ -649,6 +878,10 @@ class _CustomerFormState extends State<_CustomerForm> {
   late final _name = TextEditingController(text: widget.customer?.name);
   late final _phone = TextEditingController(text: widget.customer?.phone);
   late final _address = TextEditingController(text: widget.customer?.address);
+  late final _extra = [
+    for (final p in widget.customer?.extraPhones ?? const <String>[])
+      TextEditingController(text: p),
+  ];
   late String _photo = widget.customer?.photo ?? '';
   bool _saved = false;
 
@@ -657,6 +890,9 @@ class _CustomerFormState extends State<_CustomerForm> {
     _name.dispose();
     _phone.dispose();
     _address.dispose();
+    for (final c in _extra) {
+      c.dispose();
+    }
     // সেভ না করে বের হলে নতুন তোলা ছবি মুছে ফেলা
     if (!_saved && _photo.isNotEmpty && _photo != widget.customer?.photo) {
       deletePhoto(_photo);
@@ -691,13 +927,13 @@ class _CustomerFormState extends State<_CustomerForm> {
         ),
       ),
     );
-    if (source == null) return;
+    if (source == null || !mounted) return;
     final previous = _photo;
     if (source == 'remove') {
       setState(() => _photo = '');
     } else {
-      final path = await pickCompressedPhoto(source as ImageSource);
-      if (path == null) return;
+      final path = await pickCompressedPhoto(context, source as ImageSource);
+      if (path == null || !mounted) return;
       setState(() => _photo = path);
     }
     // আগের অসংরক্ষিত ছবি থাকলে মুছে ফেলা
@@ -706,6 +942,28 @@ class _CustomerFormState extends State<_CustomerForm> {
     }
   }
 
+  List<String> get _phones => [_phone.text, for (final c in _extra) c.text];
+
+  Widget _extraPhoneField(TextEditingController c) => Padding(
+    padding: const EdgeInsets.only(top: 12),
+    child: TextField(
+      controller: c,
+      keyboardType: TextInputType.phone,
+      decoration: InputDecoration(
+        hintText: 'আরেকটি নম্বর',
+        prefixIcon: const Icon(Icons.phone_outlined),
+        suffixIcon: IconButton(
+          tooltip: 'নম্বরটি সরান',
+          icon: const Icon(Icons.close_rounded),
+          onPressed: () => setState(() {
+            _extra.remove(c);
+            c.dispose();
+          }),
+        ),
+      ),
+    ),
+  );
+
   Future<void> _save() async {
     if (_name.text.trim().isEmpty) return toast(context, 'নাম লিখুন');
     final store = Store.instance;
@@ -713,7 +971,7 @@ class _CustomerFormState extends State<_CustomerForm> {
     if (c == null) {
       final id = await store.addCustomer(
         name: _name.text,
-        phone: _phone.text,
+        phones: _phones,
         address: _address.text,
         photo: _photo,
       );
@@ -724,7 +982,7 @@ class _CustomerFormState extends State<_CustomerForm> {
       await store.updateCustomer(
         c.id,
         name: _name.text,
-        phone: _phone.text,
+        phones: _phones,
         address: _address.text,
         photo: _photo,
       );
@@ -820,7 +1078,19 @@ class _CustomerFormState extends State<_CustomerForm> {
                 ),
               ),
             ),
-            const SizedBox(height: 12),
+            for (final c in _extra) _extraPhoneField(c),
+            if (_extra.length < maxExtraPhones)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () =>
+                      setState(() => _extra.add(TextEditingController())),
+                  icon: const Icon(Icons.add_rounded),
+                  label: const Text('আরও নম্বর যোগ করুন'),
+                ),
+              )
+            else
+              const SizedBox(height: 12),
             TextField(
               controller: _address,
               decoration: const InputDecoration(
